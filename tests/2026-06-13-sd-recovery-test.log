@@ -1,0 +1,85 @@
+[2026-06-13T22:51:00Z] === PocketForge SD Self-Recovery Test ===
+[2026-06-13T22:51:00Z] Host: matt-laptop (trimui-project session)
+[2026-06-13T22:51:00Z] Device: TrimUI Smart Pro at 192.168.86.98 (MAC dc:44:60:88:2a:31)
+[2026-06-13T22:51:00Z] SD card: /dev/sdb (58 GB spare, exfat)
+[2026-06-13T22:51:00Z] Serial console: ESP32-S3 bridge on Dell runner /dev/ttyACM0 (not used this test)
+[2026-06-13T22:51:00Z]
+
+=== PHASE 1: Establish baseline ===
+
+[2026-06-13T22:51:00Z] Wrote vendor boot0.img (65536 bytes) to /dev/sdb at sector 256 (128 KiB offset).
+[2026-06-13T22:51:00Z] eGON.BT0 magic verified at sector 256.
+[2026-06-13T22:51:00Z] The spare SD card now has a valid Allwinner A133 SPL at the BROM-expected offset.
+[2026-06-13T22:51:00Z] BASELINE ESTABLISHED.
+
+=== PHASE 2: Corrupt the SPL ===
+
+[2026-06-13T22:51:52Z] Checking for existing SPL at sector 256 on /dev/sdb...
+[2026-06-13T22:51:52Z] eGON.BT0 magic found — valid SPL present at sector 256.
+[2026-06-13T22:51:52Z] Backing up 32 KiB from sector 256 to /tmp/opencode/boot0-backup.bin...
+[2026-06-13T22:51:52Z] Backup saved: /tmp/opencode/boot0-backup.bin (32768 bytes)
+[2026-06-13T22:51:52Z] CORRUPTING SPL at sector 256 on /dev/sdb (zeroing 32 KiB)...
+[2026-06-13T22:51:55Z] 64+0 records in / 64+0 records out / 32768 bytes copied
+[2026-06-13T22:51:55Z] Corruption verified: eGON.BT0 magic is GONE from sector 256.
+[2026-06-13T22:51:55Z] CORRUPTION COMPLETE.
+
+=== PHASE 3: Verify boot failure + eMMC self-recovery ===
+
+[2026-06-13T22:52:00Z] User removed corrupted spare SD from laptop reader.
+[2026-06-13T22:52:00Z] User inserted corrupted spare SD into TrimUI Smart Pro.
+[2026-06-13T22:52:00Z] User powered on the device.
+
+[2026-06-13T22:55:00Z] RESULT: Device booted to stock TrimUI/CrossMix menu (USER-confirmed visual).
+[2026-06-13T22:55:00Z] The A133 BROM skipped the corrupted SD card (no valid eGON.BT0 at sector 256)
+[2026-06-13T22:55:00Z] and fell through to the internal eMMC, which has a valid boot chain at sector 16.
+[2026-06-13T22:55:00Z] Stock CrossMix booted normally from eMMC.
+[2026-06-13T22:55:00Z]
+[2026-06-13T22:55:00Z] SSH verification: Connection refused on port 22 (expected — nosleep.sh and SSH
+[2026-06-13T22:55:00Z] overlay config are on the ORIGINAL SD's overlayfs, not the spare SD). The TCP
+[2026-06-13T22:55:00Z] RST response confirms the device's network stack was up at 192.168.86.98.
+[2026-06-13T22:55:00Z]
+[2026-06-13T22:55:00Z] SELF-RECOVERY VERIFIED: Device booted from eMMC despite corrupted SD.
+
+=== PHASE 4: Restore ===
+
+[2026-06-13T23:08:00Z] User powered off the TSP.
+[2026-06-13T23:08:00Z] User removed corrupted spare SD from TSP.
+[2026-06-13T23:08:00Z] User re-inserted original SD card (with nosleep.sh) into TSP.
+[2026-06-13T23:08:00Z] User powered on TSP.
+
+[2026-06-13T23:10:46Z] SSH verification PASSED:
+  SSH_OK
+  4.9.191
+  07:10:46 up 2 min, 0 users, load average: 2.01, 0.89, 0.34
+
+[2026-06-13T23:10:46Z] TSP is back online with original SD, stock CrossMix running, SSH functional.
+
+[2026-06-13T23:10:53Z] Spare SD card restored: boot0.img re-written to sector 256.
+[2026-06-13T23:10:58Z] eGON.BT0 magic confirmed at sector 256 on /dev/sdb.
+[2026-06-13T23:10:58Z] RESTORE COMPLETE.
+
+=== TEST SUMMARY ===
+
+Phase 1 (baseline):      PASS — boot0.img written, eGON.BT0 verified at sector 256
+Phase 2 (corrupt):       PASS — eGON.BT0 zeroed, corruption verified
+Phase 3 (self-recovery): PASS — USER confirmed device booted stock CrossMix from eMMC
+                                despite corrupted SD. BROM correctly fell through.
+                                TCP connection at 192.168.86.98 confirmed (conn refused = net stack up).
+Phase 4 (restore):       PASS — SPL restored, eGON.BT0 re-verified. Original SD back in TSP.
+                                SSH to 192.168.86.98 working (kernel 4.9.191, uptime 2 min).
+
+SCOPE NOTE: This test proves the SD SELF-RECOVERY path (corrupted SD -> BROM falls through
+to eMMC -> stock boots). FEL device enumeration (USB 1f3a:efe8) was NOT tested in this session
+because reaching FEL requires ALL boot media to fail — and the eMMC vendor boot chain lives on
+the user area (not the hardware boot partitions, which are all-zeros), so removing the SD alone
+does not trigger FEL. FEL pad enumeration is deferred to when the case is open for other reasons
+or if an eMMC-write operation is ever planned (Phase 1 never writes eMMC).
+
+eMMC BOOT CHAIN FINDING (new, discovered during pre-implementation research):
+The vendor boot chain (eGON.BT0 SPL) lives on the eMMC USER AREA at sector 16 (8 KiB offset),
+NOT on the eMMC hardware boot partitions (mmcblk0boot0/mmcblk0boot1 are all-zeros, 4 MiB each).
+The mmc-utils `mmc bootpart enable 0 0` trick documented in the bead notes does NOT help reach
+FEL — disabling the (already-empty) hardware boot partitions has no effect. The BROM reads from
+the user area regardless. This is documented in docs/fel-entry.md.
+
+=== END OF TEST ===
