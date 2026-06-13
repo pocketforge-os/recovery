@@ -1,0 +1,7 @@
+# Protect workflow files and CI config from unauthorized changes.
+# Any PR touching these paths requires review from the maintainer.
+# This is the load-bearing defense against fork-PR runner abuse on public repos.
+
+/.github/workflows/**  @Burke9077
+/.github/actions/**    @Burke9077
+/.github/CODEOWNERS    @Burke9077
