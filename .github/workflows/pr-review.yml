@@ -1,0 +1,27 @@
+# PR review — thin caller for the org peer-review merge gate (tsp-8ny).
+#
+# Copied verbatim from pocketforge-os/pocketforge-automation
+# .github/workflows/pr-review.yml (the canonical caller — see the reusable
+# workflow pr-review-gate.yml there for how the gate works). Keep the job id
+# `pf-pr-review` — the required-check context "pf-pr-review / review" must be
+# uniform org-wide.
+#
+# The @main reference is DELIBERATELY mutable, not a pinned SHA: the gate runs
+# its review tooling from the automation repo's origin/main regardless (a SHA
+# pin would not pin behavior), gate fixes must roll out org-wide without N
+# repo bumps, and changes to the gate land through that same-org repo's own
+# branch→PR→review process.
+
+name: PR review
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  pf-pr-review:
+    uses: pocketforge-os/pocketforge-automation/.github/workflows/pr-review-gate.yml@main
