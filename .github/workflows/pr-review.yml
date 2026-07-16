@@ -21,6 +21,18 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
 
+# One review RUN per PR: a new push cancels the superseded run AT TRIGGER TIME,
+# so stale-head runs never sit in the queue holding saturated runner slots
+# (tsp-ikk0.8; the gate's job-level concurrency only takes effect at job
+# pickup, which is why queued duplicates accumulated). The group name MUST
+# stay distinct from the gate job's group (`pf-pr-review-<repo>-<n>`):
+# identical groups at workflow level and job level of the same run are
+# detected by GitHub as a concurrency DEADLOCK and the review job is
+# cancelled (github/vscode-github-actions#135) — do NOT "unify" the names.
+concurrency:
+  group: pf-pr-review-run-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   pull-requests: write
