@@ -1,25 +1,28 @@
 # PR review — thin caller for the org peer-review merge gate (tsp-8ny, tsp-mx3).
 #
 # Copies the canonical thin caller from pocketforge-os/shared-workflows
-# .github/workflows/pr-review.yml (the shared reusable workflows repo — see
-# pr-review-gate.yml there for how the gate itself works). Keep the job id
-# `pf-pr-review`: the org-wide required-check context "pf-pr-review / review"
-# must be uniform across every repo for the org ruleset to gate on it.
+# .github/workflows/pr-review.yml. Keep the job id `pf-pr-review` — the
+# org-wide required-check context "pf-pr-review / review" must be uniform.
 #
-# The @main reference is DELIBERATELY mutable, not a pinned SHA:
-#   - the gate re-fetches its review tooling (scripts/review-pr.sh) from
-#     pocketforge-automation origin/main at run time regardless, so a SHA pin
-#     here would NOT pin behavior;
-#   - gate fixes must roll out org-wide without N repo bumps;
-#   - changes to the gate land through shared-workflows' own branch → PR →
-#     peer-review flow (dogfooded on its own PRs by a local `uses: ./` caller
-#     inside that repo).
+# The @main reference is DELIBERATELY mutable, not a pinned SHA: the gate
+# runs its review tooling from origin/main regardless (a SHA pin would not
+# pin behavior), gate fixes must roll out org-wide without N repo bumps,
+# and changes to the gate land through their host repo's own branch → PR →
+# review process.
 
 name: PR review
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
+    # `edited` re-runs the gate when the PR BODY (or base) changes, so a
+    # description-only fix — checking a deferral box, adding a bead cite or a
+    # Related-PRs link — refreshes the verdict WITHOUT an empty push
+    # (tsp-ikk0.19: agents cannot re-run workflows — the bot token has no
+    # actions:write — so a push was their only self-serve lever, and each push
+    # queues the repo's whole CI suite). The job-level guard below skips
+    # title-only edits. review-pr.sh always fetches the LIVE PR body at run
+    # start, so the run judges the post-edit description.
+    types: [opened, reopened, synchronize, ready_for_review, edited]
 
 # One review RUN per PR: a new push cancels the superseded run AT TRIGGER TIME,
 # so stale-head runs never sit in the queue holding saturated runner slots
@@ -29,8 +32,14 @@ on:
 # identical groups at workflow level and job level of the same run are
 # detected by GitHub as a concurrency DEADLOCK and the review job is
 # cancelled (github/vscode-github-actions#135) — do NOT "unify" the names.
+# `edited`-triggered runs carry the same pull_request.number, so body/base
+# edits share this group: rapid successive edits supersede instead of
+# stacking. Title-only edits are diverted to a separate `-noop` group —
+# workflow-level concurrency acts at TRIGGER time, before the job-level `if`
+# skips them, so in the shared group a title edit would cancel an in-flight
+# (or queued) real review run and then skip, leaving the gate dead.
 concurrency:
-  group: pf-pr-review-run-${{ github.repository }}-${{ github.event.pull_request.number }}
+  group: pf-pr-review-run-${{ github.repository }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'edited' && github.event.changes.body == null && github.event.changes.base == null) && '-noop' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -39,4 +48,10 @@ permissions:
 
 jobs:
   pf-pr-review:
+    # Only body/base edits change what the gate judges — a title-only edit
+    # skips (the skipped caller job creates no new "pf-pr-review / review"
+    # check run, so the prior verdict stands). `changes.body`/`changes.base`
+    # are objects when that field changed; compare against null explicitly —
+    # GitHub Actions expression truthiness on objects is not to be trusted.
+    if: ${{ github.event.action != 'edited' || github.event.changes.body != null || github.event.changes.base != null }}
     uses: pocketforge-os/shared-workflows/.github/workflows/pr-review-gate.yml@main
