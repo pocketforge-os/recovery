@@ -9,7 +9,7 @@ This repository contains two deliberately separate recovery concepts:
 - The existing `scripts/`, `docs/`, and `tests/` trees are **host-side unbricking
   tools and documentation**. They are not the device recovery UI.
 - [`surface/`](surface/) is the **on-device recovery surface** contract and its
-  CPU-only offscreen scaffold. It does not launch or import the PocketForge launcher.
+  CPU-only offscreen UI. It does not launch or import the PocketForge launcher or theme.
 
 The on-device surface reports durable recovery conditions and only offers actions
 whose capabilities are truthfully available. OTA is used when the device is reachable;

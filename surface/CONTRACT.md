@@ -38,12 +38,14 @@ or failed (with evidence). FEL reports instructions shown, recovery detected, or
 failed (with evidence). Presentation derives customer copy from these states and must
 not claim success, availability, or progress that the typed state does not establish.
 
-This scaffold does not implement OTA, FEL, rollback, slot switching, factory reset,
-reflash, settings, app catalog, image packaging, or final visual design.
+The UI emits only a typed `RecoveryIntent`; an authority outside this crate performs
+any OTA or FEL work and returns a typed `ActionResult`. This surface does not implement
+OTA, FEL, rollback, slot switching, factory reset, reflash, settings, app catalog, or
+image packaging.
 
 ## Rendering boundary
 
-The `offscreen` module currently renders a deterministic placeholder into a pure-CPU
-RGBA buffer. It imports only this crate's contract types. The production renderer and
-fbdev presentation arrive after renderer selection; no launcher dependency is present
-or permitted.
+The `offscreen` module renders the complete minimal surface into a deterministic,
+pure-CPU RGBA buffer with source-owned embedded type. The committed fixture hashes
+cover the condition receipt, both capability states, and a typed result. Run
+`scripts/check-launcher-absent.sh`; no launcher or theme dependency is permitted.
