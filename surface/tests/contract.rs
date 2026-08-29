@@ -64,5 +64,29 @@ fn offscreen_fixture_has_stable_hash() {
     };
     let frame = offscreen::render(&fixture);
     assert_eq!(frame.rgba.len(), offscreen::WIDTH * offscreen::HEIGHT * 4);
-    assert_eq!(offscreen::stable_hash(&frame), "35355fa5825f61a5");
+    assert_eq!(offscreen::stable_hash(&frame).unwrap(), "345dcd0a08d648c5");
+}
+
+#[test]
+fn stable_hash_uses_canonical_u32_dimension_encoding() {
+    let frame = offscreen::Frame {
+        width: 1,
+        height: 1,
+        rgba: vec![0x12, 0x34, 0x56, 0x78],
+    };
+
+    // FNV-1a over this exact layout: [01 00 00 00][01 00 00 00][12 34 56 78].
+    assert_eq!(offscreen::stable_hash(&frame).unwrap(), "3ca103ceef0d1915");
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn stable_hash_rejects_dimensions_larger_than_u32() {
+    let frame = offscreen::Frame {
+        width: u32::MAX as usize + 1,
+        height: 1,
+        rgba: Vec::new(),
+    };
+
+    assert!(offscreen::stable_hash(&frame).is_err());
 }

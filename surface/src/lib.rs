@@ -143,20 +143,21 @@ pub mod offscreen {
         frame
     }
 
-    pub fn stable_hash(frame: &Frame) -> String {
+    pub fn stable_hash(frame: &Frame) -> Result<String, std::num::TryFromIntError> {
         // FNV-1a is intentionally simple and stable across toolchains.
+        let width = u32::try_from(frame.width)?;
+        let height = u32::try_from(frame.height)?;
         let mut hash = 0xcbf29ce484222325_u64;
-        for byte in frame
-            .width
+        for byte in width
             .to_le_bytes()
             .into_iter()
-            .chain(frame.height.to_le_bytes())
+            .chain(height.to_le_bytes())
             .chain(frame.rgba.iter().copied())
         {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x100000001b3);
         }
-        format!("{hash:016x}")
+        Ok(format!("{hash:016x}"))
     }
 
     fn fill(frame: &mut Frame, color: [u8; 4]) {
