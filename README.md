@@ -2,6 +2,20 @@
 
 FEL unbrick and flashing host tooling for the TrimUI Smart Pro (Allwinner A133P, USB ID `1f3a:efe8`).
 
+## Two recovery trees
+
+This repository contains two deliberately separate recovery concepts:
+
+- The existing `scripts/`, `docs/`, and `tests/` trees are **host-side unbricking
+  tools and documentation**. They are not the device recovery UI.
+- [`surface/`](surface/) is the **on-device recovery surface** contract and its
+  CPU-only offscreen scaffold. It does not launch or import the PocketForge launcher.
+
+The on-device surface reports durable recovery conditions and only offers actions
+whose capabilities are truthfully available. OTA is used when the device is reachable;
+FEL is the recovery floor otherwise. Moving or swapping an SD card is never an
+on-device recovery step.
+
 ## Safety Model
 
 PocketForge boots entirely from SD card. Stock CrossMix lives on internal eMMC untouched.
