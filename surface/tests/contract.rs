@@ -55,8 +55,26 @@ fn available_action_emits_typed_intent_only() {
 #[test]
 fn unavailable_action_cannot_activate() {
     let error = surface(false).activate(0).unwrap_err();
-    assert_eq!(error.action, RecoveryAction::OtaUpdate);
-    assert_eq!(error.reason, "Network is not reachable");
+    assert_eq!(
+        error,
+        ActivationError::Unavailable {
+            action: RecoveryAction::OtaUpdate,
+            reason: "Network is not reachable".into(),
+        }
+    );
+}
+#[test]
+fn out_of_range_selection_returns_typed_error() {
+    let mut empty = surface(true);
+    empty.capabilities.clear();
+    assert_eq!(
+        empty.activate(0),
+        Err(ActivationError::InvalidSelection { index: 0 })
+    );
+    assert_eq!(
+        surface(true).activate(2),
+        Err(ActivationError::InvalidSelection { index: 2 })
+    );
 }
 #[test]
 fn typed_result_is_presented() {

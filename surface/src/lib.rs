@@ -70,7 +70,7 @@ impl Capability {
     pub fn activate(&self) -> Result<Activation, ActivationError> {
         match self {
             Self::Available { action, .. } => Ok(Activation { action: *action }),
-            Self::Unavailable { action, reason } => Err(ActivationError {
+            Self::Unavailable { action, reason } => Err(ActivationError::Unavailable {
                 action: *action,
                 reason: reason.clone(),
             }),
@@ -89,9 +89,14 @@ impl Activation {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ActivationError {
-    pub action: RecoveryAction,
-    pub reason: String,
+pub enum ActivationError {
+    Unavailable {
+        action: RecoveryAction,
+        reason: String,
+    },
+    InvalidSelection {
+        index: usize,
+    },
 }
 
 /// The only output of activating a control. An authority outside the UI consumes it.
@@ -142,7 +147,11 @@ pub struct RecoverySurface {
 impl RecoverySurface {
     /// Produces an intent, never a device-side effect.
     pub fn activate(&self, index: usize) -> Result<RecoveryIntent, ActivationError> {
-        self.capabilities[index].activate().map(Into::into)
+        self.capabilities
+            .get(index)
+            .ok_or(ActivationError::InvalidSelection { index })?
+            .activate()
+            .map(Into::into)
     }
     /// Results are supplied by the authority that consumed the intent.
     pub fn present_result(&mut self, result: ActionResult) {
