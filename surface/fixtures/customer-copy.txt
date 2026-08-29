@@ -1,0 +1,3 @@
+Network reachable. Update over the air (OTA).
+Network unavailable. OTA cannot start.
+Use FEL recovery when OTA is unavailable.

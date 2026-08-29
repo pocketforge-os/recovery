@@ -1,0 +1,3 @@
+condition-capabilities-unavailable 224f2012414981b1
+condition-capabilities-available 8a1854df0fe4d8a2
+typed-result 47f19c1a15b96abe
