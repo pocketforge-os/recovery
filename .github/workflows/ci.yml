@@ -13,11 +13,15 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Install stable Rust
         run: rustup toolchain install stable --profile minimal
+      - name: Check Cargo.lock and vendor tree are current
+        run: |
+          scripts/check-vendor.sh
+          scripts/test-check-vendor.sh
       - name: Test
-        run: cargo test --workspace --locked
+        run: cargo test --offline --workspace --locked
         working-directory: surface
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --offline --locked --workspace --all-targets -- -D warnings
         working-directory: surface
       - name: Check launcher is absent
         run: surface/scripts/check-launcher-absent.sh
