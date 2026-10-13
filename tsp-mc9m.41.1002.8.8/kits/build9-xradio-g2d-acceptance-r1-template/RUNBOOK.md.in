@@ -1,0 +1,211 @@
+# Build 9 stock-xradio and G2D acceptance
+
+This generated kit accepts exactly Build 9 raw `@IMAGE_SHA@`. It is one
+`kit-resume-boot-open`, three ordered `kit-resume-step` rows, and one
+`kit-resume-close`. Do not add `ExtraBootArgs`, `KitPayload`, `insmod`, or a
+serial data path. DutExec is used once for bounded bootstrap control; every
+test byte and result moves over authenticated Wi-Fi SSH.
+
+## Inputs and refusal gate
+
+```bash
+set -euo pipefail
+expected_raw=@IMAGE_SHA@
+generation=$(openssl rand -hex 16)
+kit=${BUILD9_KIT:?generated raw-bound kit}
+image_dir=${BUILD9_IMAGE_DIR:?published Build 9 image directory}
+image=$image_dir/Image.img
+image_source=$image_dir/ImageSource.json
+live_repo=${PF_AUTOMATION_REPO:?merged pocketforge-automation checkout}
+expected_automation=dcee1dfc258091984e70e62305c2c86e5544efae
+seed_source=/home/matt/recovery/tsp-mc9m.41.995.43.3/kits/build8-writeback-standalone-r19
+run_root=${BUILD9_RUN_ROOT:?recovery directory outside the generated kit}
+run=$run_root/build9-accept-$generation
+seed_kit=$run/seed-kit
+SQ_DIR=/home/matt/recovery/gpu14
+SQ_QUEUE=$SQ_DIR/queue.tsv
+host_wifi_interface=wlp4s0
+dut_interface=wlan0
+wifi_source=${BUILD9_WIFI_SOURCE:-192.168.86.235}
+laptop_ip=$wifi_source
+
+test "$(git -C "$live_repo" rev-parse HEAD)" = "$expected_automation"
+test "$(jq -r .RawSHA256 "$image_source")" = "$expected_raw"
+test "$(sha256sum "$image" | cut -d' ' -f1)" = "$expected_raw"
+test "$(sed -n 's/^build9_raw_sha256=//p' "$kit/IDENTITY")" = "$expected_raw"
+(cd "$kit" && sha256sum -c --strict --quiet SHA256SUMS)
+env PATH=/usr/bin:/bin "$kit/smoke.sh"
+mkdir -p "$run/requests" "$run/series" "$run/row-receipts" "$run/revisions"
+```
+
+Any mismatch above is `BUILD9_STOP state=STOP stage=preflight
+reason=raw_identity_mismatch`; do not read secrets, seal, or queue it.
+
+## Fresh network-only seed and boot-open
+
+The preparer is the network-only seed pattern from automation PR #1440. Its
+payload argument is copied only as inert provenance; `--network-only` removes
+`KitPayload` from the FelBoot request. Use the consumed r19 handle recorded in
+that source kit. The final sealer call is the first secret/node mutation.
+
+```bash
+python3 "$kit/prepare-seed-template.py" --network-only \
+  --source "$seed_source" --output "$seed_kit" \
+  --payload "$kit/pf-kit-payload.tar.gz" --image-source "$image_source" \
+  --consumed-handle 183b36e3dc8474620e948abfe12e469f
+(cd "$seed_kit" && sha256sum -c --strict --quiet SHA256SUMS)
+env PATH=/usr/bin:/bin "$seed_kit/postseal-check.sh" "$image" "$expected_raw"
+install -d -m 0700 "$run/seed-transport"
+python3 "$seed_kit/seal-request.py" --kit "$seed_kit" --image "$image" \
+  --image-sha256 "$expected_raw" --transport-receipt-dir "$run/seed-transport"
+felboot_request=$seed_kit/felboot-request.json
+jq -e --arg raw "$expected_raw" \
+  '(keys|sort)==["ImageSource","SeedHandle"] and .ImageSource.RawSHA256==$raw and
+   (has("ExtraBootArgs")|not) and (has("KitPayload")|not)' \
+  "$felboot_request" >/dev/null
+
+deadline=$(date -u -d '+100 minutes' +%Y-%m-%dT%H:%M:%SZ)
+anchor=$run/series/anchor.json
+jq -n --arg anchor "$anchor" --arg repo "$live_repo" --arg generation "$generation" \
+  --arg holder "tsp-mc9m.41.1002.8.8.$generation" --arg deadline "$deadline" \
+  --arg original "$run/series/initial-flash.json" --arg kit "$kit" \
+  --slurpfile image "$image_source" --slurpfile felboot "$felboot_request" \
+  '{Anchor:$anchor,Live:{Repo:$repo},Generation:$generation,Holder:$holder,
+    Dut:"tsp",Place:"tsp-base",Deadline:$deadline,ImageSource:$image[0],
+    FelBootRequest:$felboot[0],OriginalBootReceipt:$original,
+    BaseKitDirectory:$kit}' >"$run/requests/boot-open.json"
+env SQ_DIR="$SQ_DIR" SQ_QUEUE="$SQ_QUEUE" "$SQ_DIR/seal-resume-row.sh" \
+  "build9-accept-boot-open-$generation" kit-resume-boot-open \
+  "$run/requests/boot-open.json" "$run/row-receipts/boot-open" './smoke.sh'
+```
+
+Wait for the anchor, then prove the complete image was written and read back:
+
+```bash
+jq -e --arg raw "$expected_raw" --arg original "$run/series/initial-flash.json" \
+  '.BaseImageRawSHA256Verified==$raw and .OriginalBootReceiptPath==$original' \
+  "$anchor" >/dev/null
+jq -e --arg raw "$expected_raw" \
+  '.TaskState=="Completed" and .ReturnCode==0 and
+   .SourceVerification.Write.RawSHA256==$raw and
+   .SourceVerification.Readback.RawSHA256==$raw' \
+  "$run/series/initial-flash.json" >/dev/null
+```
+
+## Ordered steps
+
+```bash
+make_revision() {
+  name=$1; dst=$run/revisions/$name
+  mkdir "$dst"; cp -a "$kit/." "$dst/"; printf '%s\n' "$name" >"$dst/REVISION"
+  (cd "$dst"; find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%P\n' |
+    sort | while read -r file; do sha256sum "$file"; done >SHA256SUMS;
+    sha256sum -c --strict --quiet SHA256SUMS)
+}
+queue_step() {
+  name=$1; request=$2
+  env SQ_DIR="$SQ_DIR" SQ_QUEUE="$SQ_QUEUE" "$SQ_DIR/seal-resume-row.sh" \
+    "build9-accept-$name-$generation" kit-resume-step "$request" \
+    "$run/row-receipts/$name" './smoke.sh'
+}
+```
+
+Revision 000 is the only DutExec row. It confirms stock in-tree xradio, no
+blacklist, completed CCMP association, DHCPv4, default route, SSH listener, and
+returns the fresh public host key. A command refusal is INVALID, never FAIL.
+
+```bash
+make_revision bootstrap
+jq -n --arg anchor "$anchor" --arg repo "$live_repo" \
+  --arg receipt "$run/series/revision-000.json" --arg kit "$run/revisions/bootstrap" \
+  --rawfile cmd "$kit/bootstrap-dut.sh" --slurpfile image "$image_source" \
+  '{Anchor:$anchor,Live:{Repo:$repo},Receipt:$receipt,ImageSource:$image[0],
+    RevisionDirectory:$kit,Steps:[{Name:"network-bootstrap",Transport:"dutexec",
+    Command:$cmd}],Final:false}' >"$run/requests/bootstrap.json"
+queue_step bootstrap "$run/requests/bootstrap.json"
+bootstrap=$run/series/revision-000.json
+jq -e --arg dut "$dut_interface" '.Outcome=="pass" and (.StepResults|map(.Name))==["network-bootstrap"] and
+  (.StepResults[0].Stdout|test("BUILD9_BOOTSTRAP state=PASS dut_interface="+$dut+" address=[0-9.]+ stock_xradio=in-tree extra_boot_args=absent ssh=active"))' \
+  "$bootstrap" >/dev/null
+dut_host=$(jq -r '.StepResults[0].Stdout|capture("address=(?<a>[0-9.]+)").a' "$bootstrap")
+jq -r '.StepResults[0].Stdout|split("\n")[]|select(startswith("ssh-ed25519 "))' \
+  "$bootstrap" | awk -v h="$dut_host" '{print h" "$0}' >"$run/known_hosts"
+chmod 0600 "$run/known_hosts"
+known_sha=$(sha256sum "$run/known_hosts" | cut -d' ' -f1)
+```
+
+Revision 001 is network-only. It asserts host `wlp4s0` association and its
+direct route, then proves authenticated SSH with helper receipts and performs
+push -> push-exec -> pull for the deterministic 1 MiB object.
+
+```bash
+make_revision network
+jq -n --arg anchor "$anchor" --arg repo "$live_repo" \
+  --arg receipt "$run/series/revision-001.json" --arg kit "$run/revisions/network" \
+  --arg host "$dut_host" --arg receipts "$run/seed-transport" \
+  --arg known "$run/known_hosts" --arg known_sha "$known_sha" \
+  --arg iface "$host_wifi_interface" --arg dut_iface "$dut_interface" --arg source "$wifi_source" --arg laptop "$laptop_ip" \
+  --slurpfile image "$image_source" \
+  '{Anchor:$anchor,Live:{Repo:$repo},Receipt:$receipt,ImageSource:$image[0],
+    RevisionDirectory:$kit,Steps:[{Name:"network",Transport:"network",
+    Argv:[$kit+"/run-network-step",$host,"debug",$receipts,$known,$known_sha,
+    $iface,$source,$laptop,$dut_iface]}],Final:false}' >"$run/requests/network.json"
+queue_step network "$run/requests/network.json"
+jq -e '.Outcome=="pass" and (.StepResults|map(.Name))==["network"] and
+  (.StepResults[0].Stdout|contains("BUILD9_NETWORK_STEP state=PASS host_interface=wlp4s0") and contains("transport=network-only"))' \
+  "$run/series/revision-001.json" >/dev/null
+grep -Eq "^BUILD9_NETWORK state=PASS dut_interface=${dut_interface} address=[0-9.]+ route=default authenticated_ssh=pass root_pings=pass$" "$run/seed-transport/pull-12/network-result.txt"
+grep -Fx 'BUILD9_TRANSPORT state=PASS operation=push-push-exec-pull bytes=1048576 sha256=30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58' "$run/seed-transport/pull-12/network-result.txt"
+```
+
+Revision 002 carries the unchanged G2D payload and all results over that same
+network leg. Its predicates are copied verbatim from template manifest
+`730aefb67e125ae49674674c0d93e26353a644eec556060cc63e5480ed341792`.
+
+```bash
+make_revision g2d
+jq -n --arg anchor "$anchor" --arg repo "$live_repo" \
+  --arg receipt "$run/series/revision-002.json" --arg kit "$run/revisions/g2d" \
+  --arg host "$dut_host" --arg receipts "$run/seed-transport" \
+  --arg known "$run/known_hosts" --arg known_sha "$known_sha" \
+  --slurpfile image "$image_source" \
+  '{Anchor:$anchor,Live:{Repo:$repo},Receipt:$receipt,ImageSource:$image[0],
+    RevisionDirectory:$kit,Steps:[{Name:"g2d",Transport:"network",
+    Argv:[$kit+"/run-g2d-step",$host,"debug",$receipts,$known,$known_sha]}],
+    Final:true}' >"$run/requests/g2d.json"
+queue_step g2d "$run/requests/g2d.json"
+jq -e '.Outcome=="pass" and (.StepResults|map(.Name))==["g2d"] and
+  (.StepResults[0].Stdout=="BUILD9_G2D_STEP state=PASS transport=network-only payload=push execution=push-exec results=pull\n")' \
+  "$run/series/revision-002.json" >/dev/null
+```
+
+## Close and exact stop predicates
+
+Always queue close after an opened series, including after STOP, INVALID, or
+FAIL. VBUS isolation must be proven before graceful poweroff; no fallback is a
+successful acceptance close.
+
+```bash
+python3 "$kit/pf-kit-transport.py" teardown-key --receipt-dir "$run/seed-transport"
+jq -n --arg anchor "$anchor" --arg repo "$live_repo" \
+  --arg receipt "$run/series/terminal.json" \
+  '{Anchor:$anchor,Live:{Repo:$repo},Receipt:$receipt,Reason:"success"}' \
+  >"$run/requests/close.json"
+env SQ_DIR="$SQ_DIR" SQ_QUEUE="$SQ_QUEUE" "$SQ_DIR/seal-resume-row.sh" \
+  "build9-accept-close-$generation" kit-resume-close "$run/requests/close.json" \
+  "$run/row-receipts/close" -
+jq -e '.Schema=="pocketforge.kit-resume-terminal/v1" and .State=="CLOSED" and
+  .Reason=="success" and (.Teardown|map(.Action))==
+  ["vbus-off","graceful-poweroff","force-off","psu-off","power-zero","reap","lease-release","place-free"] and
+  (.Teardown|all(.Status=="pass"))' "$run/series/terminal.json" >/dev/null
+```
+
+Classification is exact: `BUILD9_NETWORK state=INVALID ...
+reason=instrument_refused` means the instrument refused a root operation and
+the device verdict is unmade; `BUILD9_STOP state=STOP stage=<bootstrap|network|g2d>
+reason=<token>` means a prerequisite or transport predicate was not proved;
+`BUILD9_NETWORK state=FAIL ...` is reserved for an executed root data-path
+probe that returned failure. No class permits serial fallback or continuation
+to G2D. Before live queueing, rerun `dut-binary-check.sh` against this published
+image for all generated DUT commands, run `smoke.sh`, and `jq -e .` every
+request. `seal-resume-row.sh` mutates the queue and has no dry run.
