@@ -185,7 +185,7 @@ g2d=$run/series/revision-002.json
 jq -e '.Outcome=="pass" and (.StepResults|map(.Name))==["g2d"]' "$g2d" >/dev/null
 g2d_stdout=$run/verified-stdout/g2d.stdout
 "$kit/receipt-tools.sh" stdout "$g2d" 0 "$g2d_stdout" "$run/series" >/dev/null
-grep -Fx 'BUILD9_G2D_STEP state=PASS transport=network-only payload=push execution=push-exec results=pull' "$g2d_stdout" >/dev/null
+"$kit/verify-g2d-step.sh" "$g2d_stdout" "$run/seed-transport/pull-22/acceptance-result.txt"
 ```
 
 ## Close and exact stop predicates
