@@ -10,6 +10,7 @@ trap cleanup EXIT HUP INT TERM
 "$K/test-receipt-side-files.sh"
 "$K/test-dutexec-command-size.py" "$SESSION_SOURCE"
 "$K/test-g2d-runbook-predicate.sh"
+"$K/test-runbook-close-guard.sh"
 if "$K/prepare-kit.py" --output "$D/missing" >"$D/missing.out" 2>&1; then exit 1; fi
 if "$K/prepare-kit.py" --output "$D/bad" --image-sha256 nope >"$D/bad.out" 2>&1; then exit 1; fi
 raw=$(printf 'Build 9 hermetic raw fixture\n' | sha256sum | cut -d' ' -f1)
