@@ -8,7 +8,7 @@ dut_interface=$(/usr/bin/sed -n 's/^dut_interface=//p' "$K/IDENTITY")
 printf '%s\n' "$raw" | /usr/bin/grep -Eq '^[0-9a-f]{64}$'
 [ "$(/usr/bin/stat -c %s "$K/network-smoke.bin")" = 1048576 ]
 [ "$(/usr/bin/sha256sum "$K/network-smoke.bin" | /usr/bin/awk '{print $1}')" = 30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58 ]
-[ "$(/usr/bin/sha256sum "$K/pf-kit-payload.tar.gz" | /usr/bin/awk '{print $1}')" = 2c2c5f1f67e7ed2943a1df6afb7dbf3f37a265e5b8a85b1dc821c9a478fbd9f5 ]
+[ "$(/usr/bin/sha256sum "$K/pf-kit-payload.tar.gz" | /usr/bin/awk '{print $1}')" = d93f822eadecc90cebaf4ed6acc9c6422e154ddd292b419284a0ee380c28ae5a ]
 [ -n "$host_interface" ] && [ -n "$dut_interface" ] && [ "$host_interface" != "$dut_interface" ]
 if /usr/bin/grep -F "$host_interface" "$K/bootstrap-dut.sh" "$K/network-dut.sh" >/dev/null; then
   printf '%s\n' 'BUILD9_ACCEPTANCE_SMOKE state=FAIL reason=host_interface_in_dut_script'

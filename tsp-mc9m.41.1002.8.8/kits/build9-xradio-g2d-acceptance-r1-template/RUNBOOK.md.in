@@ -5,6 +5,8 @@ This generated kit accepts exactly Build 9 raw `@IMAGE_SHA@`. It is one
 `kit-resume-close`. Do not add `ExtraBootArgs`, `KitPayload`, `insmod`, or a
 serial data path. DutExec is used once for bounded bootstrap control; every
 test byte and result moves over authenticated Wi-Fi SSH.
+After bootstrap, diagnosis MUST use the network `push-exec` leg; do not add
+DutExec diagnostic rows or consume the bounded serial-control budget.
 
 ## Inputs and refusal gate
 
@@ -129,7 +131,8 @@ jq -e --arg dut "$dut_interface" '.Outcome=="pass" and (.StepResults|map(.Name))
   "$bootstrap" >/dev/null
 dut_host=$(jq -r '.StepResults[0].Stdout|capture("address=(?<a>[0-9.]+)").a' "$bootstrap")
 jq -r '.StepResults[0].Stdout|split("\n")[]|select(startswith("ssh-ed25519 "))' \
-  "$bootstrap" | awk -v h="$dut_host" '{print h" "$0}' >"$run/known_hosts"
+  "$bootstrap" | awk -v h="$dut_host" '{print h" "$1" "$2}' >"$run/known_hosts"
+awk 'NF != 3 { exit 1 }' "$run/known_hosts" || fail known_hosts_field_count
 chmod 0600 "$run/known_hosts"
 known_sha=$(sha256sum "$run/known_hosts" | cut -d' ' -f1)
 ```
@@ -148,7 +151,7 @@ jq -n --arg anchor "$anchor" --arg repo "$live_repo" \
   --slurpfile image "$image_source" \
   '{Anchor:$anchor,Live:{Repo:$repo},Receipt:$receipt,ImageSource:$image[0],
     RevisionDirectory:$kit,Steps:[{Name:"network",Transport:"network",
-    Argv:[$kit+"/run-network-step",$host,"debug",$receipts,$known,$known_sha,
+    Argv:[$kit+"/run-network-step",$host,"gamer",$receipts,$known,$known_sha,
     $iface,$source,$laptop,$dut_iface]}],Final:false}' >"$run/requests/network.json"
 queue_step network "$run/requests/network.json"
 jq -e '.Outcome=="pass" and (.StepResults|map(.Name))==["network"] and
@@ -171,7 +174,7 @@ jq -n --arg anchor "$anchor" --arg repo "$live_repo" \
   --slurpfile image "$image_source" \
   '{Anchor:$anchor,Live:{Repo:$repo},Receipt:$receipt,ImageSource:$image[0],
     RevisionDirectory:$kit,Steps:[{Name:"g2d",Transport:"network",
-    Argv:[$kit+"/run-g2d-step",$host,"debug",$receipts,$known,$known_sha]}],
+    Argv:[$kit+"/run-g2d-step",$host,"gamer",$receipts,$known,$known_sha]}],
     Final:true}' >"$run/requests/g2d.json"
 queue_step g2d "$run/requests/g2d.json"
 jq -e '.Outcome=="pass" and (.StepResults|map(.Name))==["g2d"] and

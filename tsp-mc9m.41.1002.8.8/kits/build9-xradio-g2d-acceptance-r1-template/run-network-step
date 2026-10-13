@@ -8,9 +8,9 @@ host_interface=${6:?host-interface}; source_ip=${7:?host-source}; laptop_ip=${8:
 dut_interface=${9:?dut-interface}
 stop() { printf 'BUILD9_STOP state=STOP stage=network reason=%s\n' "$1"; exit 64; }
 
-link=$(/usr/sbin/iw dev "$host_interface" link 2>&1) || stop host_association_unreadable
-grep -q '^Connected to ' <<<"$link" || stop host_not_associated
-route=$(/usr/sbin/ip -json route get "$host" oif "$host_interface" from "$source_ip") || stop route_unreadable
+link=$(/usr/bin/nmcli -t -f GENERAL.STATE device show "$host_interface" 2>&1) || stop host_association_unreadable
+grep -q '^GENERAL.STATE:100' <<<"$link" || stop host_not_associated
+route=$(/usr/sbin/ip -json route get "$host" oif "$host_interface") || stop route_unreadable
 jq -e --arg i "$host_interface" --arg s "$source_ip" 'length==1 and .[0].dev==$i and ((.[0].prefsrc//.[0].src)==$s) and (.[0]|has("gateway")|not)' <<<"$route" >/dev/null || stop route_transport_forbidden
 common=(--host "$host" --user "$user" --receipt-dir "$receipt" --host-key-file "$known_hosts" --host-key-sha256 "$known_sha")
 python3 "$K/pf-kit-transport.py" push "${common[@]}" --sequence 10 \

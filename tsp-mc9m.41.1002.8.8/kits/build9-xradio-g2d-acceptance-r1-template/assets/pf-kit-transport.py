@@ -254,7 +254,7 @@ def assert_explicit_route(host: str, direction: str, interface: str,
     try:
         result = subprocess.run(
             ["ip", "-json", "route", "get", host,
-             "oif", interface, "from", source],
+             "oif", interface],
             check=False, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             timeout=5,
         )
@@ -809,10 +809,10 @@ def inspect_pull_file(*, remote_path: str, host: str, user: str, key: Path,
                       source: str) -> tuple[int, str]:
     operation = "pull"
     inspect = (
-        "set -eu; if ! sudo -n /usr/bin/test -e -- "
+        "set -eu; if ! sudo -n /usr/bin/test -e "
         + shlex.quote(remote_path)
         + "; then printf 'PF_ITER_PULL_MISSING\\n'; exit 44; fi; "
-        "sudo -n /usr/bin/test -f -- " + shlex.quote(remote_path)
+        "sudo -n /usr/bin/test -f " + shlex.quote(remote_path)
         + " || exit 45; bytes=$(sudo -n /usr/bin/stat -c %s -- "
         + shlex.quote(remote_path)
         + "); actual=$(sudo -n /usr/bin/sha256sum -- "

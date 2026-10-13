@@ -14,12 +14,13 @@ done >"$D/all-dut-commands.txt"
 # their absolute image paths so the checker covers commands not spelled out in
 # the three wrapper scripts.
 printf '%s\n' \
-    /bin/sh /bin/busybox \
+    /bin/bash /bin/sh /bin/busybox \
     /usr/bin/awk /usr/bin/basename /usr/bin/cat /usr/bin/cloud-init \
-    /usr/bin/dmesg /usr/bin/dirname /usr/bin/env /usr/bin/grep /usr/bin/id \
-    /usr/bin/install /usr/bin/python3 /usr/bin/sed /usr/bin/sha256sum \
+    /usr/bin/cp /usr/bin/dmesg /usr/bin/dirname /usr/bin/env /usr/bin/find \
+    /usr/bin/grep /usr/bin/head /usr/bin/id /usr/bin/install /usr/bin/mkdir \
+    /usr/bin/mktemp /usr/bin/python3 /usr/bin/rmdir /usr/bin/sed /usr/bin/sha256sum \
     /usr/bin/stat /usr/bin/sudo /usr/bin/systemctl /usr/bin/tar /usr/bin/test \
-    /usr/bin/timeout /usr/bin/v4l2-compliance /usr/bin/v4l2-ctl \
+    /usr/bin/tee /usr/bin/timeout /usr/bin/v4l2-compliance /usr/bin/v4l2-ctl \
     /usr/sbin/ip /usr/sbin/modinfo /usr/sbin/wpa_cli \
     >>"$D/all-dut-commands.txt"
 "$CHECK" "$IMAGE" "$D/all-dut-commands.txt"

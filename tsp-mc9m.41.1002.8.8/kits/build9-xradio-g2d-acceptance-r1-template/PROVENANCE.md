@@ -15,11 +15,26 @@
   `/home/matt/recovery/tsp-mc9m.41.923.56/kits/g2d-postmerge-image-acceptance-r1-template`,
   manifest SHA-256
   `730aefb67e125ae49674674c0d93e26353a644eec556060cc63e5480ed341792`.
-  The payload is copied byte-for-byte; its SHA-256 is
-  `2c2c5f1f67e7ed2943a1df6afb7dbf3f37a265e5b8a85b1dc821c9a478fbd9f5`.
-- Network transport helper: automation tree
-  `dcee1dfc258091984e70e62305c2c86e5544efae`, file SHA-256
-  `932cbb0be9a7265e48ff6136a35e37cc009b5673d308107f52fc41f6ff13ff0e`.
+  The payload is derived from that template, replacing only
+  `pf-v4l2-rotate` with the source-owned helper below; its SHA-256 is
+  `d93f822eadecc90cebaf4ed6acc9c6422e154ddd292b419284a0ee380c28ae5a`.
+- G2D helper source baseline: pocketforge-automation
+  `f254513fb52b2afcaface69e74df7311bf638c36`,
+  `tests/hil-regress/tools/pf-v4l2-rotate/pf-v4l2-rotate.c`. The local,
+  source-owned derivative removes the external `xz` process, emits a plain
+  deterministic ustar archive, separates latency errors from other failures,
+  and records the original sample index plus errno/timeout kind. Source
+  SHA-256 is `0dcf2ed6656450488e4ec7a3973de8745336a8837275df79d6f1c6d08974c8d0`;
+  the AArch64 helper SHA-256 is
+  `5a184a5aaa848dc4078cae6503821fb03cbb5c05f27d35a616dbb471e853ef1d`.
+  It was built twice byte-identically with the project AArch64 container
+  definition SHA-256
+  `7e427c4844c5e8cbed52a0cef16426f0127e7642dda0a7a57e46e9677738fb9e`;
+  its newest required glibc symbol is `GLIBC_2.34`.
+- Network transport helper: vendored temporary candidate requested by the
+  owner while its automation PR is pending, file SHA-256
+  `230901fd1b65d750dc4614852c6442fe0f004f05c26cf310677b3f11ceeb84f0`.
+  It includes route-source inference, pull `test --`, and typed stderr fixes.
 - Network-only seed pattern and three seed tools: automation PR #1440 exact
   head `04a8bd0cb2b98d1761d5b4886b6e8d7b88fc5fe0`. They are copied into the
   recovery template so generation is hermetic; their use remains behind the

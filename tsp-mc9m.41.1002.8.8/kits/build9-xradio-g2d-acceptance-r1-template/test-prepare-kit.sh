@@ -5,6 +5,7 @@ IMAGE=${1:?published-build9-image.img}
 D=$(mktemp -d "${RUNNER_TEMP:-/tmp}/build9-acceptance-kit.XXXXXX")
 cleanup() { find "$D" -mindepth 1 -delete; rmdir "$D"; }
 trap cleanup EXIT HUP INT TERM
+"$K/test-renewal-contract.sh"
 if "$K/prepare-kit.py" --output "$D/missing" >"$D/missing.out" 2>&1; then exit 1; fi
 if "$K/prepare-kit.py" --output "$D/bad" --image-sha256 nope >"$D/bad.out" 2>&1; then exit 1; fi
 raw=$(printf 'Build 9 hermetic raw fixture\n' | sha256sum | cut -d' ' -f1)
@@ -58,6 +59,8 @@ grep -Fx 'platform_commit=3e9bda124b7bd3579600579d0468890c839d62ca' "$D/one/IDEN
 grep -Fx 'image_commit=dc3637f774e304f5a42a22f948bdd6d54608f259' "$D/one/IDENTITY" >/dev/null
 grep -Fx 'host_wifi_interface=wlp4s0' "$D/one/IDENTITY" >/dev/null
 grep -Fx 'dut_interface=wlan0' "$D/one/IDENTITY" >/dev/null
+grep -Fx 'ssh_user=gamer' "$D/one/IDENTITY" >/dev/null
+grep -Fx 'post_bootstrap_diagnostics=network-push-exec-only' "$D/one/IDENTITY" >/dev/null
 grep -Fx 'host_wifi_interface=wlp4s0' "$D/seed-output/IDENTITY" >/dev/null
 grep -Fx 'dut_interface=wlan0' "$D/seed-output/IDENTITY" >/dev/null
 if "$K/prepare-kit.py" --output "$D/upper" --image-sha256 "$(printf '%s' "$raw" | tr a-f A-F)" >"$D/upper.out" 2>&1; then exit 1; fi
