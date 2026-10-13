@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Source this before boot-open, then arm it as soon as the series anchor exists.
+# Source this before boot-open, then arm it immediately before the enqueue may
+# create a boot-open row.  The anchor is produced asynchronously after that.
 
 build9_close_queued=0
 
@@ -15,13 +16,32 @@ build9_queue_close() {
     build9_close_queued=1
 }
 
+build9_wait_for_anchor() {
+    local wait_seconds=${BUILD9_ANCHOR_WAIT_SECONDS:-6300}
+    local start=$SECONDS
+    if [[ ! $wait_seconds =~ ^[0-9]+$ ]]; then
+        printf 'BUILD9_CLOSE state=FAIL reason=anchor_wait_invalid seconds=%q\n' \
+            "$wait_seconds" >&2
+        return 2
+    fi
+    while [[ ! -f $anchor ]]; do
+        if (( SECONDS - start >= wait_seconds )); then
+            printf 'BUILD9_CLOSE state=FAIL reason=anchor_wait_timeout seconds=%s\n' \
+                "$wait_seconds" >&2
+            return 1
+        fi
+        sleep 1
+    done
+}
+
 build9_close_on_exit() {
     local original_rc=$?
     local close_rc=0
-    trap - EXIT HUP INT TERM
+    trap - EXIT
+    trap '' HUP INT TERM
     set +e
     if [[ ${build9_close_queued:-0} -eq 0 ]]; then
-        build9_queue_close failure
+        build9_wait_for_anchor && build9_queue_close failure
         close_rc=$?
         if [[ $close_rc -ne 0 ]]; then
             printf 'BUILD9_CLOSE state=FAIL reason=exit_cleanup_queue_failed rc=%s original_rc=%s\n' \
@@ -34,10 +54,11 @@ build9_close_on_exit() {
 build9_close_on_signal() {
     local signal_rc=${1:?signal-exit-status}
     local close_rc=0
-    trap - EXIT HUP INT TERM
+    trap - EXIT
+    trap '' HUP INT TERM
     set +e
     if [[ ${build9_close_queued:-0} -eq 0 ]]; then
-        build9_queue_close failure
+        build9_wait_for_anchor && build9_queue_close failure
         close_rc=$?
         if [[ $close_rc -ne 0 ]]; then
             printf 'BUILD9_CLOSE state=FAIL reason=signal_cleanup_queue_failed rc=%s signal_rc=%s\n' \
