@@ -39,6 +39,13 @@ if "$D/no-sealer/prepare-seed-template.py" --network-only \
     --payload "$D/no-sealer/pf-kit-payload.tar.gz" --image-source "$D/ImageSource.json" \
     --consumed-handle 183b36e3dc8474620e948abfe12e469f >"$D/no-sealer.out" 2>&1; then exit 1; fi
 grep -F 'state=FAIL reason=sealer_companion_invalid' "$D/no-sealer.out" >/dev/null
+cp -a "$D/one" "$D/aliased-interface"
+sed -i 's/^host_wifi_interface=.*/host_wifi_interface=wlan0/' "$D/aliased-interface/IDENTITY"
+if "$D/aliased-interface/prepare-seed-template.py" --network-only \
+    --source "$seed_source" --output "$D/aliased-interface-output" \
+    --payload "$D/aliased-interface/pf-kit-payload.tar.gz" --image-source "$D/ImageSource.json" \
+    --consumed-handle 183b36e3dc8474620e948abfe12e469f >"$D/aliased-interface.out" 2>&1; then exit 1; fi
+grep -F 'state=FAIL reason=identity_interface_alias' "$D/aliased-interface.out" >/dev/null
 "$D/one/prepare-seed-template.py" --network-only \
   --source "$seed_source" --output "$D/seed-output" \
   --payload "$D/one/pf-kit-payload.tar.gz" --image-source "$D/ImageSource.json" \
@@ -54,4 +61,4 @@ grep -Fx 'dut_interface=wlan0' "$D/one/IDENTITY" >/dev/null
 grep -Fx 'host_wifi_interface=wlp4s0' "$D/seed-output/IDENTITY" >/dev/null
 grep -Fx 'dut_interface=wlan0' "$D/seed-output/IDENTITY" >/dev/null
 if "$K/prepare-kit.py" --output "$D/upper" --image-sha256 "$(printf '%s' "$raw" | tr a-f A-F)" >"$D/upper.out" 2>&1; then exit 1; fi
-printf 'BUILD9_ACCEPTANCE_KIT_TEST state=PASS raw_refusal=pass deterministic=pass sealed_smoke=pass companion_refusal=pass seed_template=pass\n'
+printf 'BUILD9_ACCEPTANCE_KIT_TEST state=PASS raw_refusal=pass deterministic=pass sealed_smoke=pass companion_refusal=pass interface_alias_refusal=pass seed_template=pass\n'
