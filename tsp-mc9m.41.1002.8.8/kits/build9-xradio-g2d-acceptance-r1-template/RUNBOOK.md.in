@@ -126,12 +126,14 @@ jq -n --arg anchor "$anchor" --arg repo "$live_repo" \
     Command:$cmd}],Final:false}' >"$run/requests/bootstrap.json"
 queue_step bootstrap "$run/requests/bootstrap.json"
 bootstrap=$run/series/revision-000.json
-jq -e --arg dut "$dut_interface" '.Outcome=="pass" and (.StepResults|map(.Name))==["network-bootstrap"] and
-  (.StepResults[0].Stdout|test("BUILD9_BOOTSTRAP state=PASS dut_interface="+$dut+" address=[0-9.]+ stock_xradio=in-tree extra_boot_args=absent ssh=active"))' \
-  "$bootstrap" >/dev/null
-dut_host=$(jq -r '.StepResults[0].Stdout|capture("address=(?<a>[0-9.]+)").a' "$bootstrap")
-jq -r '.StepResults[0].Stdout|split("\n")[]|select(startswith("ssh-ed25519 "))' \
-  "$bootstrap" | awk -v h="$dut_host" '{print h" "$1" "$2}' >"$run/known_hosts"
+jq -e '.Outcome=="pass" and (.StepResults|map(.Name))==["network-bootstrap"]' "$bootstrap" >/dev/null
+bootstrap_stdout=$run/verified-stdout/bootstrap.stdout
+"$kit/receipt-tools.sh" stdout "$bootstrap" 0 "$bootstrap_stdout" "$run/series" >/dev/null
+grep -Eq "BUILD9_BOOTSTRAP state=PASS dut_interface=${dut_interface} address=[0-9.]+ stock_xradio=in-tree extra_boot_args=absent ssh=active" "$bootstrap_stdout"
+dut_host=$(sed -n 's/.*BUILD9_BOOTSTRAP state=PASS .* address=\([0-9.]*\) .*/\1/p' "$bootstrap_stdout")
+test -n "$dut_host" || fail bootstrap_address_missing
+grep '^ssh-ed25519 ' "$bootstrap_stdout" |
+  awk -v h="$dut_host" '{print h" "$1" "$2}' >"$run/known_hosts"
 awk 'NF != 3 { exit 1 }' "$run/known_hosts" || fail known_hosts_field_count
 chmod 0600 "$run/known_hosts"
 known_sha=$(sha256sum "$run/known_hosts" | cut -d' ' -f1)
@@ -154,9 +156,11 @@ jq -n --arg anchor "$anchor" --arg repo "$live_repo" \
     Argv:[$kit+"/run-network-step",$host,"gamer",$receipts,$known,$known_sha,
     $iface,$source,$laptop,$dut_iface]}],Final:false}' >"$run/requests/network.json"
 queue_step network "$run/requests/network.json"
-jq -e '.Outcome=="pass" and (.StepResults|map(.Name))==["network"] and
-  (.StepResults[0].Stdout|contains("BUILD9_NETWORK_STEP state=PASS host_interface=wlp4s0") and contains("transport=network-only"))' \
-  "$run/series/revision-001.json" >/dev/null
+network=$run/series/revision-001.json
+jq -e '.Outcome=="pass" and (.StepResults|map(.Name))==["network"]' "$network" >/dev/null
+network_stdout=$run/verified-stdout/network.stdout
+"$kit/receipt-tools.sh" stdout "$network" 0 "$network_stdout" "$run/series" >/dev/null
+grep -F 'BUILD9_NETWORK_STEP state=PASS host_interface=wlp4s0' "$network_stdout" | grep -F 'transport=network-only' >/dev/null
 grep -Eq "^BUILD9_NETWORK state=PASS dut_interface=${dut_interface} address=[0-9.]+ route=default authenticated_ssh=pass root_pings=pass$" "$run/seed-transport/pull-12/network-result.txt"
 grep -Fx 'BUILD9_TRANSPORT state=PASS operation=push-push-exec-pull bytes=1048576 sha256=30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58' "$run/seed-transport/pull-12/network-result.txt"
 ```
@@ -177,9 +181,11 @@ jq -n --arg anchor "$anchor" --arg repo "$live_repo" \
     Argv:[$kit+"/run-g2d-step",$host,"gamer",$receipts,$known,$known_sha]}],
     Final:true}' >"$run/requests/g2d.json"
 queue_step g2d "$run/requests/g2d.json"
-jq -e '.Outcome=="pass" and (.StepResults|map(.Name))==["g2d"] and
-  (.StepResults[0].Stdout=="BUILD9_G2D_STEP state=PASS transport=network-only payload=push execution=push-exec results=pull\n")' \
-  "$run/series/revision-002.json" >/dev/null
+g2d=$run/series/revision-002.json
+jq -e '.Outcome=="pass" and (.StepResults|map(.Name))==["g2d"]' "$g2d" >/dev/null
+g2d_stdout=$run/verified-stdout/g2d.stdout
+"$kit/receipt-tools.sh" stdout "$g2d" 0 "$g2d_stdout" "$run/series" >/dev/null
+grep -Fx 'BUILD9_G2D_STEP state=PASS transport=network-only payload=push execution=push-exec results=pull' "$g2d_stdout" >/dev/null
 ```
 
 ## Close and exact stop predicates
@@ -190,15 +196,17 @@ successful acceptance close.
 
 ```bash
 python3 "$kit/pf-kit-transport.py" teardown-key --receipt-dir "$run/seed-transport"
-jq -n --arg anchor "$anchor" --arg repo "$live_repo" \
+close_reason=$("$kit/receipt-tools.sh" close-reason \
+  "$run/series/revision-000.json" "$run/series/revision-001.json" "$run/series/revision-002.json")
+jq -n --arg anchor "$anchor" --arg repo "$live_repo" --arg reason "$close_reason" \
   --arg receipt "$run/series/terminal.json" \
-  '{Anchor:$anchor,Live:{Repo:$repo},Receipt:$receipt,Reason:"success"}' \
+  '{Anchor:$anchor,Live:{Repo:$repo},Receipt:$receipt,Reason:$reason}' \
   >"$run/requests/close.json"
 env SQ_DIR="$SQ_DIR" SQ_QUEUE="$SQ_QUEUE" "$SQ_DIR/seal-resume-row.sh" \
   "build9-accept-close-$generation" kit-resume-close "$run/requests/close.json" \
   "$run/row-receipts/close" -
-jq -e '.Schema=="pocketforge.kit-resume-terminal/v1" and .State=="CLOSED" and
-  .Reason=="success" and (.Teardown|map(.Action))==
+jq -e --arg reason "$close_reason" '.Schema=="pocketforge.kit-resume-terminal/v1" and .State=="CLOSED" and
+  .Reason==$reason and (.Teardown|map(.Action))==
   ["vbus-off","graceful-poweroff","force-off","psu-off","power-zero","reap","lease-release","place-free"] and
   (.Teardown|all(.Status=="pass"))' "$run/series/terminal.json" >/dev/null
 ```

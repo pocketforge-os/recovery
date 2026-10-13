@@ -6,6 +6,7 @@ D=$(mktemp -d "${RUNNER_TEMP:-/tmp}/build9-acceptance-kit.XXXXXX")
 cleanup() { find "$D" -mindepth 1 -delete; rmdir "$D"; }
 trap cleanup EXIT HUP INT TERM
 "$K/test-renewal-contract.sh"
+"$K/test-receipt-side-files.sh"
 if "$K/prepare-kit.py" --output "$D/missing" >"$D/missing.out" 2>&1; then exit 1; fi
 if "$K/prepare-kit.py" --output "$D/bad" --image-sha256 nope >"$D/bad.out" 2>&1; then exit 1; fi
 raw=$(printf 'Build 9 hermetic raw fixture\n' | sha256sum | cut -d' ' -f1)
@@ -13,6 +14,7 @@ raw=$(printf 'Build 9 hermetic raw fixture\n' | sha256sum | cut -d' ' -f1)
 "$K/prepare-kit.py" --output "$D/two" --image-sha256 "$raw" >/dev/null
 cmp "$D/one/network-smoke.bin" "$D/two/network-smoke.bin"
 cmp "$D/one/pf-kit-payload.tar.gz" "$D/two/pf-kit-payload.tar.gz"
+test -x "$D/one/receipt-tools.sh"
 grep -Fx "build9_raw_sha256=$raw" "$D/one/IDENTITY" >/dev/null
 env PATH=/usr/bin:/bin "$D/one/smoke.sh"
 "$D/one/test-bootstrap-unprivileged.sh" "$IMAGE"
