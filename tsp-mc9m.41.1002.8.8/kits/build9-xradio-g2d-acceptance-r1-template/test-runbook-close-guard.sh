@@ -16,8 +16,9 @@ from pathlib import Path
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
 need = {
     "source": 'source "$kit/runbook-close-guard.sh"',
-    "anchor": 'test -f "$anchor"',
     "arm": "build9_arm_close",
+    "boot_open": '"build9-accept-boot-open-$generation"',
+    "wait": "build9_wait_for_anchor",
     "flash": '.TaskState=="Completed"',
     "explicit": "build9_queue_close auto",
     "disarm": "build9_disarm_close",
@@ -26,8 +27,9 @@ need = {
 for name, token in need.items():
     if token not in text:
         raise SystemExit(f"BUILD9_CLOSE_GUARD_TEST state=FAIL reason=runbook_{name}_missing")
-if not (text.index(need["source"]) < text.index(need["anchor"]) <
-        text.index(need["arm"]) < text.index(need["flash"])):
+if not (text.index(need["source"]) < text.index(need["arm"]) <
+        text.index(need["boot_open"]) < text.index(need["wait"]) <
+        text.index(need["flash"])):
     raise SystemExit("BUILD9_CLOSE_GUARD_TEST state=FAIL reason=runbook_arm_order")
 if not (text.index(need["explicit"]) < text.index(need["disarm"]) <
         text.index(need["terminal"])):
@@ -54,6 +56,7 @@ run_guard_case() {
     name=$1 action=$2
     log=$T/$name.log count=$T/$name.count
     : >"$log"
+    printf '%s\n' '{}' >"$T/run/series/anchor.json"
     set +e
     BUILD9_TEST_LOG=$log BUILD9_TEST_COUNT=$count \
       kit=$T/kit run=$T/run anchor=$T/run/series/anchor.json \
@@ -81,6 +84,60 @@ run_guard_case explicit_exit exit
 run_guard_case signal_term term
 run_guard_case explicit_success success
 run_guard_case explicit_retry retry
+
+# Enqueue is ambiguous once the boot-open command starts: cleanup must remain
+# armed while an asynchronously-produced anchor is still absent.
+run_delayed_anchor_case() {
+    name=$1 action=$2 expected_rc=$3
+    case_dir=$T/$name
+    mkdir "$case_dir"
+    log=$case_dir/close.log count=$case_dir/close.count
+    anchor_path=$case_dir/anchor.json
+    : >"$log"
+    set +e
+    BUILD9_TEST_LOG=$log BUILD9_TEST_COUNT=$count BUILD9_ANCHOR_WAIT_SECONDS=3 \
+      kit=$T/kit run=$T/run anchor=$anchor_path \
+      live_repo=$T/live SQ_DIR=$T/sq SQ_QUEUE=$T/sq/queue.tsv generation=0123456789abcdef0123456789abcdef \
+      bash -c 'set -euo pipefail
+        source "$1"
+        build9_arm_close
+        (sleep 1; printf "%s\n" "{}" >"$anchor") &
+        producer=$!
+        case "$2" in
+          enqueue_nonzero) false ;;
+          exit) exit 64 ;;
+          term) kill -TERM $$ ;;
+          wait) build9_wait_for_anchor; build9_queue_close auto; build9_disarm_close ;;
+        esac
+        wait "$producer"' _ "$guard" "$action"
+    rc=$?
+    set -e
+    [ "$rc" -eq "$expected_rc" ] || die "${name}_rc_${rc}"
+    [ "$(wc -l <"$log" | tr -d ' ')" = 1 ] || die "${name}_close_count"
+    if [ "$action" = wait ]; then expected=auto; else expected=failure; fi
+    grep -Fx "$expected" "$log" >/dev/null || die "${name}_close_reason"
+}
+
+run_delayed_anchor_case enqueue_then_nonzero enqueue_nonzero 1
+run_delayed_anchor_case clean_exit_before_anchor exit 64
+run_delayed_anchor_case signal_during_anchor_wait term 143
+run_delayed_anchor_case normal_delayed_anchor wait 0
+
+# A genuinely absent anchor is bounded and must not fabricate a close row.
+timeout_log=$T/anchor-timeout.log
+: >"$timeout_log"
+set +e
+BUILD9_TEST_LOG=$timeout_log BUILD9_TEST_COUNT=$T/anchor-timeout.count BUILD9_ANCHOR_WAIT_SECONDS=1 \
+  kit=$T/kit run=$T/run anchor=$T/missing-anchor.json \
+  live_repo=$T/live SQ_DIR=$T/sq SQ_QUEUE=$T/sq/queue.tsv generation=0123456789abcdef0123456789abcdef \
+  bash -c 'set -euo pipefail; source "$1"; build9_arm_close; build9_wait_for_anchor' \
+  _ "$guard" >"$T/anchor-timeout.out" 2>"$T/anchor-timeout.err"
+timeout_rc=$?
+set -e
+[ "$timeout_rc" -ne 0 ] || die anchor_timeout_accepted
+[ ! -s "$timeout_log" ] || die anchor_timeout_queued
+grep -F 'BUILD9_CLOSE state=FAIL reason=anchor_wait_timeout' "$T/anchor-timeout.err" >/dev/null || \
+  die anchor_timeout_not_typed
 
 # A pre-open shell that sources but never arms the guard must not queue teardown.
 pre_log=$T/pre-open.log
@@ -144,4 +201,4 @@ if BUILD9_TEST_SEAL_LOG=$seal_log BUILD9_TEST_TEARDOWN_LOG=$teardown_log \
 fi
 [ "$(wc -l <"$seal_log" | tr -d ' ')" = 2 ] || die invalid_mode_queued
 
-printf 'BUILD9_CLOSE_GUARD_TEST state=PASS post_open_failures=18 signals=1 explicit_success=1 explicit_retry=1 pre_open=inactive close_success=1 close_failure=1 teardown_refusal=continued invalid_mode=refused\n'
+printf 'BUILD9_CLOSE_GUARD_TEST state=PASS post_open_failures=18 signals=2 explicit_success=1 explicit_retry=1 pre_open=inactive delayed_anchor=4 anchor_timeout=bounded close_success=1 close_failure=1 teardown_refusal=continued invalid_mode=refused\n'
