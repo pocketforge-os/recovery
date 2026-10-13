@@ -38,6 +38,7 @@ test "$(sed -n 's/^build9_raw_sha256=//p' "$kit/IDENTITY")" = "$expected_raw"
 (cd "$kit" && sha256sum -c --strict --quiet SHA256SUMS)
 env PATH=/usr/bin:/bin "$kit/smoke.sh"
 mkdir -p "$run/requests" "$run/series" "$run/row-receipts" "$run/revisions"
+source "$kit/runbook-close-guard.sh"
 ```
 
 Any mismatch above is `BUILD9_STOP state=STOP stage=preflight
@@ -84,6 +85,8 @@ env SQ_DIR="$SQ_DIR" SQ_QUEUE="$SQ_QUEUE" "$SQ_DIR/seal-resume-row.sh" \
 Wait for the anchor, then prove the complete image was written and read back:
 
 ```bash
+test -f "$anchor"
+build9_arm_close
 jq -e --arg raw "$expected_raw" --arg original "$run/series/initial-flash.json" \
   '.BaseImageRawSHA256Verified==$raw and .OriginalBootReceiptPath==$original' \
   "$anchor" >/dev/null
@@ -195,16 +198,11 @@ FAIL. VBUS isolation must be proven before graceful poweroff; no fallback is a
 successful acceptance close.
 
 ```bash
-python3 "$kit/pf-kit-transport.py" teardown-key --receipt-dir "$run/seed-transport"
-close_reason=$("$kit/receipt-tools.sh" close-reason \
-  "$run/series/revision-000.json" "$run/series/revision-001.json" "$run/series/revision-002.json")
-jq -n --arg anchor "$anchor" --arg repo "$live_repo" --arg reason "$close_reason" \
-  --arg receipt "$run/series/terminal.json" \
-  '{Anchor:$anchor,Live:{Repo:$repo},Receipt:$receipt,Reason:$reason}' \
-  >"$run/requests/close.json"
-env SQ_DIR="$SQ_DIR" SQ_QUEUE="$SQ_QUEUE" "$SQ_DIR/seal-resume-row.sh" \
-  "build9-accept-close-$generation" kit-resume-close "$run/requests/close.json" \
-  "$run/row-receipts/close" -
+build9_queue_close auto
+build9_disarm_close
+close_reason=$(jq -r .Reason "$run/requests/close.json")
+# Wait for terminal.json after the close row has run; teardown is already queued,
+# so a terminal verification failure must not enqueue a duplicate close row.
 jq -e --arg reason "$close_reason" '.Schema=="pocketforge.kit-resume-terminal/v1" and .State=="CLOSED" and
   .Reason==$reason and (.Teardown|map(.Action))==
   ["vbus-off","graceful-poweroff","force-off","psu-off","power-zero","reap","lease-release","place-free"] and

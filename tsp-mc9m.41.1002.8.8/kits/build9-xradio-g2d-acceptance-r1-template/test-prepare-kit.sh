@@ -19,6 +19,8 @@ raw=$(printf 'Build 9 hermetic raw fixture\n' | sha256sum | cut -d' ' -f1)
 cmp "$D/one/network-smoke.bin" "$D/two/network-smoke.bin"
 cmp "$D/one/pf-kit-payload.tar.gz" "$D/two/pf-kit-payload.tar.gz"
 test -x "$D/one/receipt-tools.sh"
+test -x "$D/one/runbook-close.sh"
+test -x "$D/one/runbook-close-guard.sh"
 test -x "$D/one/verify-g2d-step.sh"
 grep -Fx "build9_raw_sha256=$raw" "$D/one/IDENTITY" >/dev/null
 env PATH=/usr/bin:/bin "$D/one/smoke.sh"

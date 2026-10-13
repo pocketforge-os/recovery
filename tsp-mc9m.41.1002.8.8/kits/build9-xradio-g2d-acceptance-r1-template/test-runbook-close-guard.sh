@@ -91,4 +91,57 @@ BUILD9_TEST_LOG=$pre_log BUILD9_TEST_COUNT=$T/pre-open.count \
   bash -c 'set -euo pipefail; source "$1"' _ "$guard"
 [ ! -s "$pre_log" ] || die pre_open_close_queued
 
-printf 'BUILD9_CLOSE_GUARD_TEST state=PASS post_open_failures=18 signals=1 explicit_success=1 explicit_retry=1 pre_open=inactive\n'
+# Exercise the real close helper with hermetic transport and queue adapters.
+real_kit=$T/real-kit
+real_sq=$T/real-sq
+mkdir -p "$real_kit" "$real_sq"
+cp "$closer" "$K/receipt-tools.sh" "$real_kit/"
+cat >"$real_kit/pf-kit-transport.py" <<'PY'
+#!/usr/bin/env python3
+import os, sys
+with open(os.environ["BUILD9_TEST_TEARDOWN_LOG"], "a", encoding="utf-8") as f:
+    f.write(" ".join(sys.argv[1:]) + "\n")
+raise SystemExit(int(os.environ.get("BUILD9_TEST_TEARDOWN_RC", "0")))
+PY
+cat >"$real_sq/seal-resume-row.sh" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >>"$BUILD9_TEST_SEAL_LOG"
+SH
+chmod +x "$real_kit/"* "$real_sq/seal-resume-row.sh"
+printf '%s\n' '{}' >"$T/anchor.json"
+
+make_close_run() {
+    close_run=$1
+    mkdir -p "$close_run/series" "$close_run/seed-transport"
+    for revision in 000 001 002; do
+        printf '%s\n' '{"Outcome":"pass","StepResults":[{"RC":0}]}' >"$close_run/series/revision-$revision.json"
+    done
+}
+
+seal_log=$T/seal.log teardown_log=$T/teardown.log
+: >"$seal_log"; : >"$teardown_log"
+success_run=$T/close-success; make_close_run "$success_run"
+BUILD9_TEST_SEAL_LOG=$seal_log BUILD9_TEST_TEARDOWN_LOG=$teardown_log \
+  "$closer" auto "$real_kit" "$success_run" "$T/anchor.json" "$T/live" \
+  "$real_sq" "$T/queue.tsv" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >/dev/null
+jq -e '.Reason=="success"' "$success_run/requests/close.json" >/dev/null || die close_success_reason
+[ "$(wc -l <"$seal_log" | tr -d ' ')" = 1 ] || die close_success_queue_count
+
+failure_run=$T/close-failure; make_close_run "$failure_run"
+find "$failure_run/series/revision-001.json" -maxdepth 0 -type f -delete
+BUILD9_TEST_SEAL_LOG=$seal_log BUILD9_TEST_TEARDOWN_LOG=$teardown_log BUILD9_TEST_TEARDOWN_RC=7 \
+  "$closer" auto "$real_kit" "$failure_run" "$T/anchor.json" "$T/live" \
+  "$real_sq" "$T/queue.tsv" bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb >"$T/failure.out" 2>"$T/failure.err"
+jq -e '.Reason=="failure"' "$failure_run/requests/close.json" >/dev/null || die close_missing_receipt_not_failure
+grep -F 'reason=teardown_key_failed rc=7 action=continue_to_close' "$T/failure.err" >/dev/null || die teardown_failure_not_typed
+[ "$(wc -l <"$seal_log" | tr -d ' ')" = 2 ] || die close_failure_queue_count
+[ "$(wc -l <"$teardown_log" | tr -d ' ')" = 2 ] || die teardown_attempt_count
+
+if BUILD9_TEST_SEAL_LOG=$seal_log BUILD9_TEST_TEARDOWN_LOG=$teardown_log \
+  "$closer" invalid "$real_kit" "$failure_run" "$T/anchor.json" "$T/live" \
+  "$real_sq" "$T/queue.tsv" cccccccccccccccccccccccccccccccc >/dev/null 2>&1; then
+    die invalid_close_mode_accepted
+fi
+[ "$(wc -l <"$seal_log" | tr -d ' ')" = 2 ] || die invalid_mode_queued
+
+printf 'BUILD9_CLOSE_GUARD_TEST state=PASS post_open_failures=18 signals=1 explicit_success=1 explicit_retry=1 pre_open=inactive close_success=1 close_failure=1 teardown_refusal=continued invalid_mode=refused\n'

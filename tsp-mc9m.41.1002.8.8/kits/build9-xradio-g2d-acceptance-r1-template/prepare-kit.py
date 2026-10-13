@@ -46,7 +46,8 @@ def main() -> int:
     }
     for name in ("bootstrap-dut.sh", "network-dut.sh", "g2d-dut-run.sh",
                  "run-network-step", "run-g2d-step", "smoke.sh",
-                 "receipt-tools.sh", "verify-g2d-step.sh",
+                 "receipt-tools.sh", "runbook-close.sh", "runbook-close-guard.sh",
+                 "verify-g2d-step.sh",
                  "test-bootstrap-unprivileged.sh"):
         copies[ROOT / name] = out / name
     for src, dst in copies.items():
@@ -59,7 +60,8 @@ def main() -> int:
                  "a67-seal-request.py", "postseal-check.sh", "a67-postseal-check.sh",
                  "bootstrap-dut.sh", "network-dut.sh",
                  "g2d-dut-run.sh", "run-network-step", "run-g2d-step", "smoke.sh",
-                 "receipt-tools.sh", "verify-g2d-step.sh",
+                 "receipt-tools.sh", "runbook-close.sh", "runbook-close-guard.sh",
+                 "verify-g2d-step.sh",
                  "test-bootstrap-unprivileged.sh"):
         (out / name).chmod(0o755)
     with (out / "network-smoke.bin").open("wb") as f:
