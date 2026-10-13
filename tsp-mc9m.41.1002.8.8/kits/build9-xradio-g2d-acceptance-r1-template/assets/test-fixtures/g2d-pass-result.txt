@@ -1,0 +1,16 @@
+IMAGE_DTB_GATE source=image-owned node=/soc/clock-controller@6480000 clock_names=bus,mod,mbus clock_cells=6 status=pass
+G2D_ENUM_PROBE command=for n in /dev/video[0-9]*; do test -e "$n" || continue; printf "G2D_ENUM_NODE node=%s\\n" "$n"; v4l2-ctl --info --device "$n" 2>&1 | sed -n "1,40p"; done
+G2D_ENUM node=/dev/video0 state=parsed driver=sun8i-rotate
+G2D_ENUM node=/dev/video1 state=parsed driver=cedrus
+G2D_ROTATION format=XRGB8888 angle=0 hflip=0 vflip=0 result=pass mismatches=0 output_sha256=400f6764a2ad1444c9e6fbea5099299b89f896cd80d972ce2268169123c757c1 reference_sha256=400f6764a2ad1444c9e6fbea5099299b89f896cd80d972ce2268169123c757c1 checksum_match=1
+G2D_ROTATION format=XRGB8888 angle=90 hflip=0 vflip=0 result=pass mismatches=0 output_sha256=fea6a8a80ca5aa9c00f1eb01692429097240ff61510d60639d49989d05e4a30c reference_sha256=fea6a8a80ca5aa9c00f1eb01692429097240ff61510d60639d49989d05e4a30c checksum_match=1
+G2D_ROTATION format=XRGB8888 angle=180 hflip=0 vflip=0 result=pass mismatches=0 output_sha256=f719cf18c4304cf6b1d65157a3b766db4e8bfaa4973c54700ff48bbef3449722 reference_sha256=f719cf18c4304cf6b1d65157a3b766db4e8bfaa4973c54700ff48bbef3449722 checksum_match=1
+G2D_ROTATION format=XRGB8888 angle=270 hflip=0 vflip=0 result=pass mismatches=0 output_sha256=7189437156a840026767e42e99813e05d3371b0176222be57638ab82657af821 reference_sha256=7189437156a840026767e42e99813e05d3371b0176222be57638ab82657af821 checksum_match=1
+G2D_ROTATION format=XRGB8888 angle=0 hflip=1 vflip=0 result=pass mismatches=0 output_sha256=16332969ee340c7db1aad9cb8b7a40dd759ffd9e0df8f3c46b8ddd0ba1fb0183 reference_sha256=16332969ee340c7db1aad9cb8b7a40dd759ffd9e0df8f3c46b8ddd0ba1fb0183 checksum_match=1
+G2D_ROTATION format=XRGB8888 angle=0 hflip=0 vflip=1 result=pass mismatches=0 output_sha256=15da1cffb6ca960e8b694a613da497201c9ea0c89893a0c1b38f766213342bd3 reference_sha256=15da1cffb6ca960e8b694a613da497201c9ea0c89893a0c1b38f766213342bd3 checksum_match=1
+G2D_ROTATION format=XRGB8888 angle=0 hflip=1 vflip=1 result=pass mismatches=0 output_sha256=f719cf18c4304cf6b1d65157a3b766db4e8bfaa4973c54700ff48bbef3449722 reference_sha256=f719cf18c4304cf6b1d65157a3b766db4e8bfaa4973c54700ff48bbef3449722 checksum_match=1
+G2D_PERF samples=100 median_us=11080 p95_us=11483 max_us=11754 errors=0 throughput_mib_s=633.818
+G2D_RESULT state=pass format=XRGB8888 transforms=7 checksum_matches=7 node=/dev/video0
+G2D_IRQ_DELTA before=0 after=214 delta=214
+G2D_IOMMU_FAULT_DELTA master=5 before=0 after=0 delta=0
+DEVICE_PROOF verdict=PASS image_dtb=owned identity=pass rotate90=pass cpu_reference=match latency_errors=0 irq_delta=positive iommu_fault_delta=0

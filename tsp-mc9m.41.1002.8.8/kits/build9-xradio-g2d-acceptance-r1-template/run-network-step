@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+K=$(cd -- "$(dirname -- "$0")" && pwd)
+host=${1:?dut-host}; user=${2:?dut-user}; receipt=${3:?receipt-dir}
+known_hosts=${4:?known-hosts}; known_sha=${5:?known-hosts-sha}
+host_interface=${6:?host-interface}; source_ip=${7:?host-source}; laptop_ip=${8:?laptop-ip}
+dut_interface=${9:?dut-interface}
+stop() { printf 'BUILD9_STOP state=STOP stage=network reason=%s\n' "$1"; exit 64; }
+
+link=$(/usr/bin/nmcli -t -f GENERAL.STATE device show "$host_interface" 2>&1) || stop host_association_unreadable
+grep -q '^GENERAL.STATE:100' <<<"$link" || stop host_not_associated
+route=$(/usr/sbin/ip -json route get "$host" oif "$host_interface") || stop route_unreadable
+jq -e --arg i "$host_interface" --arg s "$source_ip" 'length==1 and .[0].dev==$i and ((.[0].prefsrc//.[0].src)==$s) and (.[0]|has("gateway")|not)' <<<"$route" >/dev/null || stop route_transport_forbidden
+common=(--host "$host" --user "$user" --receipt-dir "$receipt" --host-key-file "$known_hosts" --host-key-sha256 "$known_sha")
+python3 "$K/pf-kit-transport.py" push "${common[@]}" --sequence 10 \
+  --file "$K/network-smoke.bin" network-smoke.bin 30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58
+python3 "$K/pf-kit-transport.py" push-exec "${common[@]}" --sequence 11 \
+  --file "$K/network-dut.sh" network-dut.sh "$(sha256sum "$K/network-dut.sh" | awk '{print $1}')" \
+  --timeout-seconds 60 \
+  --command "/usr/bin/sudo -n /bin/sh /run/pf-iter/11/network-dut.sh /run/pf-iter/10/network-smoke.bin $laptop_ip /run/pf-build9-acceptance/network-result.txt"
+python3 "$K/pf-kit-transport.py" pull "${common[@]}" --sequence 12 \
+  --file /run/pf-build9-acceptance/network-result.txt network-result.txt
+result=$receipt/pull-12/network-result.txt
+grep -Eq "^BUILD9_NETWORK state=PASS dut_interface=${dut_interface} address=[0-9.]+ route=default authenticated_ssh=pass root_pings=pass$" "$result" || stop network_predicate_missing
+grep -Fx 'BUILD9_TRANSPORT state=PASS operation=push-push-exec-pull bytes=1048576 sha256=30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58' "$result" >/dev/null || stop transport_predicate_missing
+printf 'BUILD9_NETWORK_STEP state=PASS host_interface=%s source=%s dut=%s dut_interface=%s transport=network-only\n' "$host_interface" "$source_ip" "$host" "$dut_interface"

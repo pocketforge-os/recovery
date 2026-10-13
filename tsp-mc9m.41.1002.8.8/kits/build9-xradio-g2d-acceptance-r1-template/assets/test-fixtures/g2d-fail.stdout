@@ -1,0 +1,2 @@
+PF_KIT_TRANSPORT state=complete transport=ssh direction=push operation=push sequence=20 files=1 bytes=314194 outcome=pass persistent_mutation=false receipt=push-20.json interface=wlp4s0 source=192.168.86.235
+PF_KIT_TRANSPORT state=complete transport=ssh direction=push-exec operation=push-exec sequence=21 files=1 bytes=3184 outcome=fail persistent_mutation=false receipt=push-exec-21.json interface=wlp4s0 source=192.168.86.235

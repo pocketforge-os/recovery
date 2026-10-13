@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+K=$(cd -- "$(dirname -- "$0")" && pwd)
+host=${1:?dut-host}; user=${2:?dut-user}; receipt=${3:?receipt-dir}
+known_hosts=${4:?known-hosts}; known_sha=${5:?known-hosts-sha}
+stop() { printf 'BUILD9_STOP state=STOP stage=g2d reason=%s\n' "$1"; exit 64; }
+common=(--host "$host" --user "$user" --receipt-dir "$receipt" --host-key-file "$known_hosts" --host-key-sha256 "$known_sha")
+python3 "$K/pf-kit-transport.py" push "${common[@]}" --sequence 20 \
+  --file "$K/pf-kit-payload.tar.gz" pf-kit-payload.tar.gz d93f822eadecc90cebaf4ed6acc9c6422e154ddd292b419284a0ee380c28ae5a
+helper_rc=0
+python3 "$K/pf-kit-transport.py" push-exec "${common[@]}" --sequence 21 \
+  --file "$K/g2d-dut-run.sh" g2d-dut-run.sh "$(sha256sum "$K/g2d-dut-run.sh" | awk '{print $1}')" \
+  --timeout-seconds 300 \
+  --command '/usr/bin/sudo -n /bin/sh /run/pf-iter/21/g2d-dut-run.sh /run/pf-iter/20/pf-kit-payload.tar.gz' || helper_rc=$?
+python3 "$K/pf-kit-transport.py" pull "${common[@]}" --sequence 22 \
+  --file /run/pf-build9-acceptance/g2d/acceptance-result.txt acceptance-result.txt \
+  --file /run/pf-build9-acceptance/g2d/rotate-receipt.tsv rotate-receipt.tsv \
+  --file /run/pf-build9-acceptance/g2d/v4l2-compliance.txt v4l2-compliance.txt
+result=$receipt/pull-22/acceptance-result.txt
+if [ "$helper_rc" != 0 ]; then
+  cat "$result"
+  printf 'BUILD9_G2D_STEP state=FAIL helper_rc=%s evidence=pulled transport=network-only\n' "$helper_rc"
+  exit 66
+fi
+grep -Eq '^G2D_ROTATION format=XRGB8888 angle=0 hflip=0 vflip=0 result=pass mismatches=0 output_sha256=([0-9a-f]{64}) reference_sha256=\1 checksum_match=1$' "$result" || stop identity_reference_failed
+grep -Eq '^G2D_ROTATION format=XRGB8888 angle=90 hflip=0 vflip=0 result=pass mismatches=0 output_sha256=([0-9a-f]{64}) reference_sha256=\1 checksum_match=1$' "$result" || stop rotate90_reference_failed
+grep -Eq '^G2D_PERF samples=[1-9][0-9]* median_us=[0-9]+ p95_us=[0-9]+ max_us=[0-9]+ errors=0 throughput_mib_s=[0-9.]+$' "$result" || stop latency_errors_nonzero
+grep -Eq '^G2D_RESULT state=pass format=XRGB8888 transforms=7 checksum_matches=7 node=/dev/video[0-9]+$' "$result" || stop final_result_failed
+grep -Eq '^G2D_IRQ_DELTA before=[0-9]+ after=[0-9]+ delta=[1-9][0-9]*$' "$result" || stop irq_delta_not_positive
+grep -Fx 'G2D_IOMMU_FAULT_DELTA master=5 before=0 after=0 delta=0' "$result" >/dev/null || stop iommu_fault_delta_nonzero
+grep -Fx 'DEVICE_PROOF verdict=PASS image_dtb=owned identity=pass rotate90=pass cpu_reference=match latency_errors=0 irq_delta=positive iommu_fault_delta=0' "$result" >/dev/null || stop device_proof_missing
+printf 'BUILD9_G2D_STEP state=PASS transport=network-only payload=push execution=push-exec results=pull\n'

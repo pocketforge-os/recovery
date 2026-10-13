@@ -1,0 +1,17 @@
+status: done
+bssid=0e:ea:14:1f:06:6a
+freq=2462
+ssid=Cobblejob
+id=0
+mode=station
+wifi_generation=4
+pairwise_cipher=CCMP
+group_cipher=CCMP
+key_mgmt=WPA2-PSK
+wpa_state=COMPLETED
+ip_address=192.168.86.14
+p2p_device_address=f2:c3:6c:3b:7c:f8
+address=f2:c3:6c:3b:7c:f8
+uuid=03d73d32-e9ea-5d56-8627-1f9a28413518
+BUILD9_BOOTSTRAP state=PASS dut_interface=wlan0 address=192.168.86.14 stock_xradio=in-tree extra_boot_args=absent ssh=active
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC2W4HWKVawtt41+HhxVRHit7+5uQeaErom6ZWKl2yvt root@tsp-base-dut

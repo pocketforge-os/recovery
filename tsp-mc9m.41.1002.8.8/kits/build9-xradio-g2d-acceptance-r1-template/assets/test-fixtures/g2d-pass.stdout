@@ -1,0 +1,4 @@
+PF_KIT_TRANSPORT state=complete transport=ssh direction=push operation=push sequence=20 files=1 bytes=314346 outcome=pass persistent_mutation=false receipt=push-20.json interface=wlp4s0 source=192.168.86.235
+PF_KIT_TRANSPORT state=complete transport=ssh direction=push-exec operation=push-exec sequence=21 files=1 bytes=4721 outcome=pass persistent_mutation=false receipt=push-exec-21.json interface=wlp4s0 source=192.168.86.235
+PF_KIT_TRANSPORT state=complete transport=ssh direction=pull operation=pull sequence=22 files=3 bytes=8816 outcome=pass persistent_mutation=false receipt=pull-22.json interface=wlp4s0 source=192.168.86.235
+BUILD9_G2D_STEP state=PASS transport=network-only payload=push execution=push-exec results=pull
