@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""Resolve one managed run to exactly one allowlisted pf-task home."""
+
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+import time
+
+
+RUN = re.compile(r"pft-[0-9a-f]{24}")
+REVISION = re.compile(r"[0-9a-f]{40}")
+DEFAULT_REGISTRY = Path("/home/matt/recovery/gpu14/run-homes.jsonl")
+DEFAULT_ALLOWLIST = [
+    {
+        "control_home": "/home/matt/.pf-task-v2",
+        "pf_task": "/home/matt/.pf-task-v2/bin/pf-task",
+        "host_config": "/home/matt/.config/pocketforge/pf-task-host.json",
+    },
+    {
+        "control_home": "/home/matt/.pf-task-v3",
+        "pf_task": "/home/matt/.local/libexec/pf-task-v3/pf-task",
+        "host_config": "/home/matt/.config/pocketforge/pf-task-v3/pf-task-host.json",
+    },
+    {
+        "control_home": "/home/matt/.pf-task",
+        "pf_task": "/home/matt/.local/bin/pf-task",
+        "host_config": "/home/matt/.config/pocketforge/pf-task-host.json",
+    },
+]
+
+
+class Refused(Exception):
+    pass
+
+
+def refuse(reason):
+    raise Refused(reason)
+
+
+def registry_path():
+    return Path(os.environ.get("PF_TASK_RUN_HOME_REGISTRY", DEFAULT_REGISTRY))
+
+
+def allowlist():
+    override = os.environ.get("PF_TASK_RUN_HOME_ALLOWLIST")
+    try:
+        values = json.loads(Path(override).read_text()) if override else DEFAULT_ALLOWLIST
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise Refused("run_home_allowlist_invalid") from exc
+    if not isinstance(values, list) or not values:
+        refuse("run_home_allowlist_invalid")
+    keys = ("control_home", "pf_task", "host_config")
+    if any(not isinstance(item, dict) or any(
+            not isinstance(item.get(key), str) or not item[key] for key in keys)
+            for item in values):
+        refuse("run_home_allowlist_invalid")
+    return values
+
+
+def validate_run(run_id):
+    if not isinstance(run_id, str) or RUN.fullmatch(run_id) is None:
+        refuse("run_id_invalid")
+
+
+def lock_path(path):
+    return path.with_suffix(path.suffix + ".lock")
+
+
+def acquire_lock(fd, operation):
+    timeout = float(os.environ.get("PF_TASK_RUN_HOME_LOCK_TIMEOUT", "5"))
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, operation | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                refuse("run_home_registry_lock_timeout")
+            time.sleep(0.05)
+
+
+def load_rows(path, *, locked=False):
+    if path.is_symlink() or not path.is_file():
+        refuse("run_home_registry_unavailable")
+    stat = path.stat()
+    if not os.environ.get("PF_TASK_RUN_HOME_ALLOW_INSECURE_TEST_REGISTRY"):
+        if stat.st_uid != os.getuid() or stat.st_mode & 0o077:
+            refuse("run_home_registry_not_private")
+    fd = None
+    try:
+        if not locked:
+            fd = os.open(lock_path(path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            acquire_lock(fd, fcntl.LOCK_SH)
+        rows = []
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise Refused(f"run_home_registry_line_invalid:{number}") from exc
+            if not isinstance(value, dict):
+                refuse(f"run_home_registry_line_invalid:{number}")
+            rows.append(value)
+        return rows
+    except (OSError, UnicodeError) as exc:
+        raise Refused("run_home_registry_unreadable") from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def canonical(row):
+    required = ("run_id", "generation", "control_home", "pf_task", "host_config", "revision")
+    if any(not isinstance(row.get(key), str) or not row[key] for key in required):
+        refuse("run_home_registry_row_invalid")
+    validate_run(row["run_id"])
+    if REVISION.fullmatch(row["revision"]) is None:
+        refuse("run_home_revision_invalid")
+    selected = {key: row[key] for key in required}
+    allowed = any(all(selected[key] == item[key] for key in
+                      ("control_home", "pf_task", "host_config"))
+                  for item in allowlist())
+    if not allowed:
+        refuse("run_home_not_allowlisted")
+    for key in ("control_home", "pf_task", "host_config"):
+        path = Path(selected[key])
+        if not path.is_absolute():
+            refuse("run_home_path_not_absolute")
+    for key in ("control_home", "pf_task", "host_config"):
+        path = Path(selected[key])
+        if not path.exists():
+            refuse("run_home_path_missing:" + key)
+    return selected
+
+
+def probe(row):
+    env = os.environ.copy()
+    env["PF_TASK_HOST_CONFIG"] = row["host_config"]
+    payload = json.dumps({"run_id": row["run_id"]}, separators=(",", ":"))
+    attempts = int(os.environ.get("PF_TASK_RUN_HOME_PROBE_ATTEMPTS", "3"))
+    timeout = float(os.environ.get("PF_TASK_RUN_HOME_PROBE_TIMEOUT", "100"))
+    for attempt in range(1, attempts + 1):
+        try:
+            result = subprocess.run(
+                [row["pf_task"], "--home", row["control_home"], "--role", "coordinator",
+                 "run.status", payload], env=env, text=True, capture_output=True,
+                timeout=timeout)
+            try:
+                value = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                value = None
+            if isinstance(value, dict) and value.get("status") == "refused":
+                refuse("run_home_positive_probe_refused")
+            if result.returncode == 0 and isinstance(value, dict):
+                if (value.get("run_id") != row["run_id"]
+                        or value.get("generation") != row["generation"]):
+                    refuse("run_home_positive_probe_identity_mismatch")
+                return row
+        except Refused:
+            raise
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        if attempt < attempts:
+            time.sleep(0.1)
+    refuse(f"run_home_positive_probe_transient:{attempts}")
+
+
+def lookup(run_id):
+    validate_run(run_id)
+    rows = [canonical(row) for row in load_rows(registry_path()) if row.get("run_id") == run_id]
+    unique = {json.dumps(row, sort_keys=True, separators=(",", ":")): row for row in rows}
+    if not unique:
+        refuse("run_home_unknown")
+    if len(unique) != 1:
+        refuse("run_home_ambiguous")
+    return next(iter(unique.values()))
+
+
+def resolve(run_id):
+    return probe(lookup(run_id))
+
+
+def register(args):
+    row = canonical({
+        "run_id": args.run_id, "generation": args.generation,
+        "control_home": args.control_home, "pf_task": args.pf_task,
+        "host_config": args.host_config, "revision": args.revision,
+    })
+    probe(row)
+    path = registry_path()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    lock = lock_path(path)
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        acquire_lock(fd, fcntl.LOCK_EX)
+        rows = load_rows(path, locked=True) if path.exists() else []
+        same = [canonical(item) for item in rows if item.get("run_id") == row["run_id"]]
+        if same and any(item != row for item in same):
+            refuse("run_home_ambiguous")
+        if not same:
+            with path.open("a", encoding="utf-8") as stream:
+                os.chmod(path, 0o600)
+                stream.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+    finally:
+        os.close(fd)
+    return row
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    for command in ("resolve", "lookup"):
+        selected = sub.add_parser(command)
+        selected.add_argument("run_id")
+        selected.add_argument("--format", choices=("json", "shell"), default="json")
+    register_p = sub.add_parser("register")
+    for name in ("run_id", "generation", "control_home", "pf_task", "host_config", "revision"):
+        register_p.add_argument("--" + name.replace("_", "-"), required=True)
+    args = parser.parse_args()
+    try:
+        if args.command == "resolve":
+            value = resolve(args.run_id)
+        elif args.command == "lookup":
+            value = lookup(args.run_id)
+        else:
+            value = register(args)
+        if args.command in ("resolve", "lookup") and args.format == "shell":
+            names = {
+                "H": value["control_home"], "PFT": value["pf_task"],
+                "PF_TASK_HOST_CONFIG": value["host_config"],
+                "RUN_GENERATION": value["generation"],
+                "RUN_HOME_REVISION": value["revision"],
+            }
+            print("; ".join(f"{name}={shlex.quote(item)}" for name, item in names.items())
+                  + "; export PF_TASK_HOST_CONFIG")
+        else:
+            print(json.dumps(value, sort_keys=True))
+        return 0
+    except Refused as exc:
+        print(json.dumps({"status": "refused", "reason": str(exc)}, sort_keys=True), file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
