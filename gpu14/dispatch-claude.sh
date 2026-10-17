@@ -48,7 +48,7 @@ Your worktree: $W (branch $(git -C "$W" rev-parse --abbrev-ref HEAD), at $at $(g
 $(cat $R/codex-worker-rules.txt | sed "s/<bead>/$bead/g")"
 key="gpu14-$bead-$(date -u +%Y%m%dT%H%M%SZ)"
 jq -n --arg key "$key" --arg parent "$parent" --arg task "$bead" --arg scope "$scope" --arg wt "$W" --arg model "$model" --arg effort "$effort" --arg approval "$approval" --arg sandbox "$sandbox" --arg p "$prompt" --arg tts "${TURN_TIMEOUT:-3600}" \
-  '{key:$key, parent:$parent, task:$task, scope:$scope, runtime:"claude", execution_host:"matt-laptop", model:{modelID:$model, providerID:"anthropic"}, claude:{tools:["Read","Edit","Write","Bash","Grep","Glob"], allowed_tools:["Read","Edit","Write","Bash","Grep","Glob","mcp__pf_task"]}, worktree:$wt, role:"worker", bounds:{context_tokens:262144, max_children:0, max_depth:0, turn_timeout_seconds:($tts|tonumber), timeout_continuations:6}, prompt:$p}' > $R/run-$wid.json
+  '{key:$key, parent:$parent, task:$task, scope:$scope, runtime:"claude", execution_host:"matt-laptop", model:{modelID:$model, providerID:"anthropic"}, claude:{tools:["Read","Edit","Write","Bash","Grep","Glob"], allowed_tools:["Read","Edit","Write","Bash","Grep","Glob","mcp__pf_task"]}, worktree:$wt, role:"worker", bounds:{context_tokens:163840, max_children:0, max_depth:0, turn_timeout_seconds:($tts|tonumber), timeout_continuations:6}, prompt:$p}' > $R/run-$wid.json
 # 2026-10-13: a refused admission used to exit silently under set -e; print the refusal body.
 if ! (cd $MC && timeout 180 python3 scripts/pf-managed.py --home $H --role coordinator run.start - < $R/run-$wid.json) > $R/admission-$wid.json; then
   echo "DISPATCH_REFUSED admission=$(head -c 400 $R/admission-$wid.json)"; exit 7; fi

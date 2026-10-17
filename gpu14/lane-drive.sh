@@ -246,6 +246,26 @@ process_status() {
       echo "$(date -u +%FT%TZ) HANDBACK $rr_reason: head ${rr_head:0:12} was already re-run once ($(cat "$rr_mark")); leaving HANDBACK for gpu-14" >> "$LOG"
     fi ;;
   esac
+  # 2026-10-16 proc-coord for gpu-14 (gsrot, tfar, rtx11 within one hour): lanes reported a LOCAL job as
+  # `CI_WAIT ghrun=<repo>/<pid>` or `BUILD_RUNNING run=<pid|unit>`; ghrun-wait returned UNREADABLE and the driver exited to
+  # gpu-14 each time. A GitHub Actions run id is numeric with >=10 digits: anything else gets the correction and the driver
+  # keeps watching (bounded by the continue cap, so a repeat cannot spin).
+  case "$stl" in *"state=BUILD_RUNNING"*|*"state=CI_WAIT"*"ghrun="*)
+    lj_bad=""
+    case "$stl" in *"state=BUILD_RUNNING"*)
+      lj_id=$(printf '%s' "$stl" | /usr/bin/grep -oE '(^|[[:space:]])runs?=[^[:space:]`]+' | head -n1 | sed 's/.*=//; s/,.*//')
+      [[ $lj_id =~ ^[0-9]{10,}$ ]] || lj_bad=${lj_id:-none} ;;
+    esac
+    case "$stl" in *"ghrun="*)
+      lj_id=$(printf '%s' "$stl" | /usr/bin/grep -oE 'ghrun=[^[:space:]`]+' | head -n1 | sed 's#.*/##')
+      [[ $lj_id =~ ^[0-9]{10,}$ ]] || lj_bad=${lj_id:-none} ;;
+    esac
+    if [ -n "$lj_bad" ]; then
+      printf 'gpu-14 driver: `%s` is not a GitHub Actions run id (those are numeric, 10+ digits), so nothing can wait on it for you. For a LOCAL job (author review, tests or a build running on this machine), end with `%s state=CONTINUE` and read its output file next turn. Use `CI_WAIT ghrun=<owner>/<repo>/<run_id>` or `BUILD_RUNNING run=<run_id>` only for real GitHub Actions runs, and `CI_WAIT pr=<owner>/<repo>#<n> head=<sha>` after a push.\n' "${lj_bad:0:60}" "$TOK" > "$R/.drv-localjob-$run.txt"
+      echo "$(date -u +%FT%TZ) local job id '${lj_bad:0:60}' in ${stl:0:120}; sent correction, keep watching" >> "$LOG"
+      cont_save=$cont; cont="$R/.drv-localjob-$run.txt"; send_cont fix; cont=$cont_save; zz 20; return 0
+    fi ;;
+  esac
   # 2026-10-15 (b11 Build 13): `state=BUILD_RUNNING run=<actions run id>` exited the driver, and gpu-14 had to chain
   # ghrun-wait.sh by hand. Treat it as a CI_WAIT on that non-PR Actions run (owned-image-build lives in automation unless
   # the line names repo=<owner>/<repo>), so the lane is re-prompted with the job conclusions when the build finishes.
@@ -289,6 +309,14 @@ process_status() {
     # create-once request; the window runner delivers that receipt to the OwnerRun by pf-task message, which starts the
     # lane's next turn by itself. Keep watching (no message from the driver); the window's own 600 s idle close and the
     # driver's hour bound end a stall, and the lane's HANDBACK (or any other state) exits to gpu-14.
+    *"state=WINDOW_WAIT"*) echo "$(date -u +%FT%TZ) WINDOW_WAIT: queued window; waiting for PF_KIT_NETWORK_READY delivery" >> "$LOG" ;;
+    # 2026-10-16 proc-coord (gpu-14 answer 1): WINDOW_DONE gen= plan=complete|incomplete records the close for
+    # window-queue.sh (complete->success, incomplete->failure) and continues the lane on its own plan; no gpu-14 turn.
+    *"state=WINDOW_DONE"*"plan="*)
+      wd=$("$R/window-queue.sh" --done-from-status "$stl" 2>&1 9>&-); wdrc=$?
+      echo "$(date -u +%FT%TZ) window done rc=$wdrc $(printf '%s' "$wd" | tail -n1 | cut -c1-200)" >> "$LOG"
+      if [ "$wdrc" = 0 ]; then send_cont cont; zz 20
+      else echo "$stl"; echo "$wd"; echo "DRIVER_EXIT reason=window_done_unrecorded rc=$wdrc"; exit 0; fi ;;
     *"state=WINDOW_STEP"*) echo "$(date -u +%FT%TZ) WINDOW_STEP ${stl##*state=WINDOW_STEP}: waiting for the runner's receipt delivery" >> "$LOG" ;;
     *"state=CI_WAIT"*)
       # 2026-10-10 (owner: fewer mechanical round trips; bead tsp-mc9m.41.995.65): the lane pushed and
@@ -386,6 +414,38 @@ process_status() {
         echo "<no $TOK line> (after $((NOSTAT_N-1)) nudges)"; $Sd/rt2.sh "$run" 3000; echo "DRIVER_EXIT reason=lane_status"; exit 0
       fi ;;
     *"state=HANDBACK"*)
+      # 2026-10-16 proc-coord (owner D2, tsp-mc9m.41.1030): a MERGE_READY is merged by merge-ready.sh, which then sends the
+      # lane its next bead from fleet-board/lane-queue/<lane>.txt. Only a HOLD or an empty queue wakes gpu-14 (report D: lanes
+      # idled ~2 h after MERGE_READY although the merge took <5 min). MERGE_READY_AUTO=0 restores the plain exit.
+      # 2026-10-16 gpu-14 (owner D3 queues): a queued bead found already done is recorded for close at release and the
+      # lane gets its next queue item without a gpu-14 turn. Empty queue or send failure exits to gpu-14 as before.
+      case "$stl" in *"reason=ALREADY_COMPLETE"*|*"reason=ALREADY_MERGED"*)
+        ab=$(printf '%s' "$stl" | grep -oE 'bead=[A-Za-z0-9._-]+' | head -n1 | cut -d= -f2)
+        printf '%s\t%s\t-\t-\tmet\t%s\n' "${ab:-unknown}" "$run" "$(date -u +%FT%TZ)" >> "$R/fleet-board/close-pending.tsv"
+        ao=$("$R/assign-next.sh" "$LANE_FAM" "$run" "$TOK" 2>>"$LOG" 9>&-); arc=$?
+        echo "$(date -u +%FT%TZ) auto-advance rc=$arc $(printf '%s' "$ao" | tail -n1)" >> "$LOG"
+        if [ "$arc" = 0 ]; then zz 20; return 0; fi ;;
+      esac
+      # 2026-10-16 proc-coord (owner D4a): a BOOT_READY naming pkg= gen= steps= label= is appended to the always-on window
+      # queue (window-queue.sh) and the driver keeps watching: the window's bundle/receipts start the lane's next turn, so
+      # the lane stays driven through the window (gpu-14: battsafe r2 had no driver at netready). Missing fields or a
+      # refused add exit to gpu-14 as before. WINDOW_QUEUE_AUTO=0 restores the plain exit.
+      case "$stl" in *"reason=BOOT_READY "*|*"reason=BOOT_READY")
+        if [ "${WINDOW_QUEUE_AUTO:-1}" = 1 ] && printf '%s' "$stl" | grep -q 'gen=[0-9a-f]\{32\}'; then
+          wq=$("$R/window-queue.sh" --add-from-status "$LANE_FAM" "$run" "$TOK" "$stl" 2>&1 9>&-); wqrc=$?
+          echo "$(date -u +%FT%TZ) window-queue add rc=$wqrc $(printf '%s' "$wq" | tail -n1 | cut -c1-200)" >> "$LOG"
+          if [ "$wqrc" = 0 ]; then zz 20; return 0; fi
+        fi ;;
+      esac
+      case "$stl" in *"reason=MERGE_READY"*|*"reason=merge_ready"*)
+        if [ "${MERGE_READY_AUTO:-1}" = 1 ]; then
+          "$R/merge-ready.sh" "$run" "$TOK" "$LANE_FAM" "$stl" > "$R/.drv-mr-$run.txt" 2>>"$LOG" 9>&- &
+          wait $!; mrc=$?; mr=$(tail -n 1 "$R/.drv-mr-$run.txt")
+          echo "$(date -u +%FT%TZ) merge-ready rc=$mrc $mr" >> "$LOG"
+          if [ "$mrc" = 0 ]; then zz 20; return 0; fi
+          echo "$stl"; echo "$mr"; $Sd/rt2.sh "$run" 3000; echo "DRIVER_EXIT reason=lane_status merge_ready_rc=$mrc"; exit 0
+        fi ;;
+      esac
       case "$stl" in *"reason="*) echo "$stl"; $Sd/rt2.sh "$run" 3000; echo "DRIVER_EXIT reason=lane_status"; exit 0 ;; esac
       HBNR_N=$(( ${HBNR_N:-0} + 1 ))
       if [ "$HBNR_N" -le 1 ]; then
@@ -417,7 +477,7 @@ if [ "${last:-0}" -gt 0 ] 2>/dev/null && /usr/bin/grep -q "status(result#$last)"
     case "$stl0" in
       *"state=CI_WAIT"*|*"state=CONTINUE"*|*"state=WORKING"*|*"state=IN_PROGRESS"*|*"state=REVIEW_WAIT"*|*"state=BUILD_WAIT"*|*"reason=CHECKS_PENDING"*|*"reason=CI_PENDING"*|*"reason=UNRELATED_CI_FAILURE"*|*"reason=CI_INFRA_"*|*"reason=CI_FLAKE"*|*"reason=CI_NOISE"*)
         echo "$(date -u +%FT%TZ) restarted on processed result #$last with no new turn; re-handling: ${stl0:0:160}" >> "$LOG"; last=$((last-1)) ;;
-      *"state=WAITING"*|*"state=WINDOW_STEP"*) : ;;
+      *"state=WAITING"*|*"state=WINDOW_STEP"*|*"state=WINDOW_WAIT"*) : ;;
       *) echo "$(date -u +%FT%TZ) restarted on processed result #$last with no new turn and no message; exiting" >> "$LOG"
          echo "${stl0:-<no $TOK line>}"; echo "DRIVER_EXIT reason=restarted_without_message hint=lane-msg the run first, then start its driver"; exit 0 ;;
     esac

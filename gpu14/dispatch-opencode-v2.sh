@@ -62,7 +62,10 @@ $(sed "s/<bead>/$bead/g" "$RULES_FILE")"
 # 2026-10-10 dsk hang: session rules do not reach `task` subagent sessions. A subagent falls back to the
 # pf-task revision opencode.json (bash "*": ask), its bash call waits for an answer that never comes, and the
 # parent turn hangs on the task call (DeepSeek, 1 h). bounds.max_children is 0, so deny `task` (last match wins).
-PERM='[{"permission":"*","pattern":"*","action":"allow"},{"permission":"bash","pattern":"*","action":"allow"},{"permission":"edit","pattern":"*","action":"allow"},{"permission":"read","pattern":"*","action":"allow"},{"permission":"external_directory","pattern":"*","action":"allow"},{"permission":"webfetch","pattern":"*","action":"allow"},{"permission":"task","pattern":"*","action":"deny"}]'
+# 2026-10-16 proc-coord (M-worker-fitness C1): pf-task v3 config_permission refuses any named rule after a
+# wildcard (managed_permission_order_unrepresentable), so EVERY OpenCode admission was refused under v3. No
+# wildcard: explicit named allows, task deny last. Verified against v3 profile.config_permission (old refused, new OK).
+PERM='[{"permission":"bash","pattern":"*","action":"allow"},{"permission":"edit","pattern":"*","action":"allow"},{"permission":"read","pattern":"*","action":"allow"},{"permission":"glob","pattern":"*","action":"allow"},{"permission":"grep","pattern":"*","action":"allow"},{"permission":"list","pattern":"*","action":"allow"},{"permission":"todowrite","pattern":"*","action":"allow"},{"permission":"external_directory","pattern":"*","action":"allow"},{"permission":"webfetch","pattern":"*","action":"allow"},{"permission":"task","pattern":"*","action":"deny"}]'
 key="${COORD//-/}-oc-$bead-$(date -u +%Y%m%dT%H%M%SZ)"
 jq -n --arg tts "${TURN_TIMEOUT:-3600}" --arg maxm "${MAX_MESSAGES:-100}" --arg key "$key" --arg parent "$parent" --arg task "$bead" --arg scope "$scope" --arg wt "$W" --arg model "$model" --arg provider "$provider" --argjson ctx "$ctx" --argjson perm "$PERM" --arg p "$prompt" \
   '{key:$key, parent:$parent, task:$task, scope:$scope, runtime:"opencode", execution_host:"matt-laptop", model:{modelID:$model, providerID:$provider}, worktree:$wt, permission:$perm, role:"worker", bounds:{context_tokens:$ctx, max_children:0, max_depth:0, max_messages:($maxm|tonumber), turn_timeout_seconds:($tts|tonumber)}, prompt:$p}' > $R/run-oc-$bead.json

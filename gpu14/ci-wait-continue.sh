@@ -172,7 +172,7 @@ while :; do
         sf=$(startup_failures); [ -z "$sf" ] || startup_failure_exit "$sf"
         cat >"$out" <<EOF
 gpu-14 driver: CI on $prspec exact head $head is GREEN ($counts).
-Proceed: author review on that exact head (same-reviewer --continue if a prior round exists; up to 4 rounds without asking gpu-14 while every prior round found a DISTINCT real defect you fixed; HANDBACK reason=REVIEW_ROUND_CAP only on churn (a repeated or re-litigated finding) or after round 4; for bench/laptop-only tooling put the owner calibration in your thread replies: accident/stale-state/fail-open/wrong-result block, adversarial-local and exotic timing are a NOTE plus one follow-up bead; fixes only in NEW commits, never amend/rebase/force-push), then \`pf-pr-merge.sh --dry-run $prspec\`, then HANDBACK merge-ready with the head sha.
+Proceed (owner D1 bring-up mode, 2026-10-16T22:39Z): author review on that exact head, ONE pass plus at most ONE same-reviewer --continue re-look. Fix only findings CAUSED by this PR's own change, in NEW commits (never amend/rebase/force-push). Any finding not caused by this PR's change (pre-existing code, merged-in main, hardening ideas, scope growth) gets a thread reply "declined, routed to <bead-id>": file that follow-up bead (bd create, worker_tier, parent = this bead), resolve the thread, and do NOT fix it here. No scope added after approval; keep PRs under ~400 changed lines. After the re-look, merge-ready on green CI: no third round. Then \`pf-pr-merge.sh --dry-run $prspec\`, then HANDBACK merge-ready with the head sha.
 If you push a new commit instead, end with \`$TOK state=CI_WAIT pr=$prspec head=<new 40-hex sha>\` and the driver waits for its CI.
 End with exactly one \`$TOK state=...\` line.
 EOF
