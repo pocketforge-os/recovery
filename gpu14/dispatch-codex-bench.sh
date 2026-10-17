@@ -25,6 +25,6 @@ Your worktree: $W (branch $(git -C "$W" rev-parse --abbrev-ref HEAD), at $at $(g
 $(cat "$RULES" | sed "s/<bead>/$bead/g")"
 key="gpu14-$bead-$(date -u +%Y%m%dT%H%M%SZ)"
 jq -n --arg key "$key" --arg parent "$parent" --arg task "$bead" --arg scope "$scope" --arg wt "$W" --arg model "$model" --arg effort "$effort" --arg approval "$approval" --arg sandbox "$sandbox" --arg p "$prompt" --arg tts "${TURN_TIMEOUT:-3600}" \
-  '{key:$key, parent:$parent, task:$task, scope:$scope, runtime:"codex", execution_host:"matt-laptop", model:{modelID:$model, providerID:"openai"}, codex:{approval:$approval, effort:$effort, sandbox:$sandbox}, worktree:$wt, role:"worker", bounds:{context_tokens:262144, max_children:0, max_depth:0, max_messages:40, turn_timeout_seconds:($tts|tonumber)}, prompt:$p}' > $R/run-$bead.json
+  '{key:$key, parent:$parent, task:$task, scope:$scope, runtime:"codex", execution_host:"matt-laptop", model:{modelID:$model, providerID:"openai"}, codex:{approval:$approval, effort:$effort, sandbox:$sandbox}, worktree:$wt, role:"worker", bounds:{context_tokens:163840, max_children:0, max_depth:0, max_messages:40, turn_timeout_seconds:($tts|tonumber)}, prompt:$p}' > $R/run-$bead.json
 (cd $MC && timeout 180 python3 scripts/pf-managed.py --home $H --role coordinator run.start - < $R/run-$bead.json) > $R/admission-$bead.json
 jq -r '"run_id=\(.run_id) generation=\(.generation) state=\(.state)"' $R/admission-$bead.json
