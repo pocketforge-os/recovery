@@ -78,7 +78,7 @@ setup; echo OPEN > "$S/state-6"; export FAKE_BODY="Related https://github.com/o/
 
 setup; export FAKE_FILES=scripts/pf-kit-window-run; mkdir -p "$S/win/g1"; echo '{"State":"open"}' > "$S/win/g1/runner.json"
 out=$("$MR" run1 TOKX fam "TOKX state=HANDBACK reason=MERGE_READY pr=pocketforge-os/pocketforge-automation#5 head=$H bead=b.1" 2>&1); rc=$?
-[ $rc -eq 10 ] && grep -q deploy_surface_while_window_open <<<"$out" && ok deploy_surface_window_holds || no deploy_surface_window_holds "$rc $out"
+[ $rc -eq 10 ] && grep -q 'deploy_surface_while_window_not_closed gen=g1 state=open' <<<"$out" && ok deploy_surface_window_holds || no deploy_surface_window_holds "$rc $out"
 
 setup; export FAKE_BODY="Related https://github.com/o/r/pull/7" FAKE_GH_FAIL_N=7; mr "$L"
 [ $rc -eq 10 ] && grep -q 'related_pr_unreadable o/r#7' <<<"$out" && ok related_unreadable_holds || no related_unreadable_holds "$rc $out"
@@ -86,6 +86,14 @@ setup; export FAKE_BODY="Related https://github.com/o/r/pull/7" FAKE_GH_FAIL_N=7
 setup; export FAKE_FILES=scripts/pf-kit-window-run; mkdir -p "$S/win/g2"; echo 'not json' > "$S/win/g2/runner.json"
 out=$("$MR" run1 TOKX fam "TOKX state=HANDBACK reason=MERGE_READY pr=pocketforge-os/pocketforge-automation#5 head=$H bead=b.1" 2>&1); rc=$?
 [ $rc -eq 10 ] && grep -q 'window_state_unreadable gen=g2' <<<"$out" && ok malformed_window_state_holds || no malformed_window_state_holds "$rc $out"
+for wst in revoked failed; do
+  setup; export FAKE_FILES=scripts/pf-kit-window-run; mkdir -p "$S/win/g3"; echo "{\"State\":\"$wst\"}" > "$S/win/g3/runner.json"
+  out=$("$MR" run1 TOKX fam "TOKX state=HANDBACK reason=MERGE_READY pr=pocketforge-os/pocketforge-automation#5 head=$H bead=b.1" 2>&1); rc=$?
+  [ $rc -eq 10 ] && grep -q "window_not_closed gen=g3 state=$wst" <<<"$out" && ok "unknown_window_state_holds_$wst" || no "unknown_window_state_holds_$wst" "$rc $out"
+done
+setup; export FAKE_FILES=scripts/pf-kit-window-run; mkdir -p "$S/win/g4"; echo '{"State":"closed"}' > "$S/win/g4/runner.json"
+out=$("$MR" run1 TOKX fam "TOKX state=HANDBACK reason=MERGE_READY pr=pocketforge-os/pocketforge-automation#5 head=$H bead=b.1 bead_complete=yes" 2>&1); rc=$?
+[ $rc -eq 0 ] && ok closed_window_allows_deploy_surface || no closed_window_allows_deploy_surface "$rc $out"
 
 setup; export FAKE_HEAD2=fedcba9876543210fedcba9876543210fedcba98; mr "$L bead_complete=yes"
 [ $rc -eq 10 ] && grep -q head_moved_pre_merge <<<"$out" && [ ! -f "$S/state-5" ] && [ "$(qlines)" = 1 ] && ok head_moved_before_merge_holds || no head_moved_before_merge_holds "$rc $out"

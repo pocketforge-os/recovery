@@ -57,7 +57,8 @@ if [ "$repo" = pocketforge-os/pocketforge-automation ] && printf '%s\n' "$files"
   for rj in "$WIN"/*/runner.json; do
     [ -e "$rj" ] || continue
     wst=$(jq -er '.State | strings' "$rj" 2>/dev/null) || hold "window_state_unreadable gen=$(basename "$(dirname "$rj")")"
-    case "$wst" in open|opening|closing) hold "deploy_surface_while_window_open gen=$(basename "$(dirname "$rj")")" ;; esac
+    # Only a positively terminal window is safe (recovery#13 re-look); open, opening, closing, failed or any unknown state HOLDs.
+    [ "$wst" = closed ] || hold "deploy_surface_while_window_not_closed gen=$(basename "$(dirname "$rj")") state=$wst"
   done
 fi
 # Re-read the head right before merging. The merge gate pins its own read (--match-head-commit), and the post-merge
