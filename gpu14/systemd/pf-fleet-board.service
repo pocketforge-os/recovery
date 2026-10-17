@@ -1,0 +1,9 @@
+[Unit]
+Description=PocketForge fleet board: regenerate (zero-LLM; owner D5 2026-10-16, tsp-mc9m.41.1030)
+
+[Service]
+Type=oneshot
+Nice=10
+TimeoutStartSec=600
+ExecStart=/usr/bin/flock -n /home/matt/recovery/gpu14/fleet-board/.refresh.lock /home/matt/recovery/gpu14/fleet-board/refresh.sh
+ExecStartPost=/usr/bin/install -m 0644 /home/matt/recovery/gpu14/fleet-board/fleet-board.html /home/matt/pf-reports/board.html

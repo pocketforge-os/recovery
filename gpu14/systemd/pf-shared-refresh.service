@@ -1,0 +1,9 @@
+[Unit]
+Description=Fast-forward the shared code checkouts to origin/main (ff-only, clean-only; zero-LLM) — tsp-mc9m.41.1030
+
+[Service]
+Type=oneshot
+Nice=10
+TimeoutStartSec=300
+Environment=PF_SHARED_CHECKOUTS_REFRESH=1 PF_SHARED_CHECKOUTS_BUDGET=240 PF_SHARED_CHECKOUTS_TIMEOUT=30 GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND=ssh\x20-o\x20BatchMode=yes
+ExecStart=/usr/bin/flock -n %h/.cache/pf-shared-refresh.lock /home/matt/mission-control/.agents/hooks/session-refresh-shared-checkouts.sh
