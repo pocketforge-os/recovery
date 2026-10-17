@@ -14,7 +14,12 @@ cat > "$T/bin/gh" <<'SH'
 #!/usr/bin/env bash
 # gh pr view N -R repo --json fields [--jq expr]
 n=$3; jqe=""; [ "${8:-}" = --jq ] && jqe=$9
+[ "$n" = "${FAKE_GH_FAIL_N:-}" ] && exit 1
 st=$(cat "$FAKE_DIR/state-$n" 2>/dev/null || echo OPEN)
+# FAKE_HEAD2: the head reported from the 2nd read on (a push between the first check and the merge).
+c=$(( $(cat "$FAKE_DIR/reads-$n" 2>/dev/null || echo 0) + 1 )); echo $c > "$FAKE_DIR/reads-$n"
+[ -n "${FAKE_HEAD2:-}" ] && [ $c -ge 2 ] && FAKE_HEAD=$FAKE_HEAD2
+[ "$st" = MERGED ] && [ -n "${FAKE_MERGED_HEAD:-}" ] && FAKE_HEAD=$FAKE_MERGED_HEAD
 fj=$(printf '%s\n' ${FAKE_FILES:-scripts/foo.sh} | jq -R '{path:.}' | jq -s .)
 j=$(jq -n --arg h "$FAKE_HEAD" --arg s "$st" --argjson f "$fj" --arg b "${FAKE_BODY:-}" \
   '{headRefOid:$h,state:$s,isDraft:false,title:"t",body:$b,files:$f,mergeCommit:{oid:"m3rge"}}')
@@ -34,7 +39,7 @@ chmod +x "$T/bin/"*
 setup() {  # fresh sandbox in $S with one queued bead for lane fam
   S=$T/s$((++N)); mkdir -p "$S/root/fleet-board/lane-queue" "$S/win"
   export GPU14_ROOT=$S/root MR_GH=$T/bin/gh MR_MERGE=$T/bin/merge MR_SEND=$T/bin/send MR_WINDOWS=$S/win FAKE_DIR=$S FAKE_HEAD=$H
-  unset FAKE_FILES FAKE_BODY FAKE_MERGE_RC FAKE_SEND_RC MERGE_READY_AUTO
+  unset FAKE_FILES FAKE_BODY FAKE_MERGE_RC FAKE_SEND_RC MERGE_READY_AUTO FAKE_GH_FAIL_N FAKE_HEAD2 FAKE_MERGED_HEAD
   printf '# queue\ntsp-next.1 do the thing\n' > "$S/root/fleet-board/lane-queue/fam.txt"
 }
 mr() { out=$("$MR" run1 TOKX fam "$1" 2>&1); rc=$?; }
@@ -74,6 +79,19 @@ setup; echo OPEN > "$S/state-6"; export FAKE_BODY="Related https://github.com/o/
 setup; export FAKE_FILES=scripts/pf-kit-window-run; mkdir -p "$S/win/g1"; echo '{"State":"open"}' > "$S/win/g1/runner.json"
 out=$("$MR" run1 TOKX fam "TOKX state=HANDBACK reason=MERGE_READY pr=pocketforge-os/pocketforge-automation#5 head=$H bead=b.1" 2>&1); rc=$?
 [ $rc -eq 10 ] && grep -q deploy_surface_while_window_open <<<"$out" && ok deploy_surface_window_holds || no deploy_surface_window_holds "$rc $out"
+
+setup; export FAKE_BODY="Related https://github.com/o/r/pull/7" FAKE_GH_FAIL_N=7; mr "$L"
+[ $rc -eq 10 ] && grep -q 'related_pr_unreadable o/r#7' <<<"$out" && ok related_unreadable_holds || no related_unreadable_holds "$rc $out"
+
+setup; export FAKE_FILES=scripts/pf-kit-window-run; mkdir -p "$S/win/g2"; echo 'not json' > "$S/win/g2/runner.json"
+out=$("$MR" run1 TOKX fam "TOKX state=HANDBACK reason=MERGE_READY pr=pocketforge-os/pocketforge-automation#5 head=$H bead=b.1" 2>&1); rc=$?
+[ $rc -eq 10 ] && grep -q 'window_state_unreadable gen=g2' <<<"$out" && ok malformed_window_state_holds || no malformed_window_state_holds "$rc $out"
+
+setup; export FAKE_HEAD2=fedcba9876543210fedcba9876543210fedcba98; mr "$L bead_complete=yes"
+[ $rc -eq 10 ] && grep -q head_moved_pre_merge <<<"$out" && [ ! -f "$S/state-5" ] && [ "$(qlines)" = 1 ] && ok head_moved_before_merge_holds || no head_moved_before_merge_holds "$rc $out"
+
+setup; export FAKE_MERGED_HEAD=fedcba9876543210fedcba9876543210fedcba98; mr "$L bead_complete=yes"
+[ $rc -eq 10 ] && grep -q merged_head_differs <<<"$out" && [ "$(qlines)" = 1 ] && [ "$(cprows)" = 0 ] && ok merged_head_differs_holds || no merged_head_differs_holds "$rc $out"
 
 setup; export FAKE_MERGE_RC=3; mr "$L bead_complete=yes"
 [ $rc -eq 10 ] && grep -q merge_refused <<<"$out" && [ "$(qlines)" = 1 ] && ok merge_refused_holds || no merge_refused_holds "$rc $out"

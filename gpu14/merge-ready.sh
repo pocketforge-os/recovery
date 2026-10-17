@@ -49,21 +49,27 @@ fi
 for ref in $(jq -r .body <<<"$pj" | grep -oE 'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+|pocketforge-os/[A-Za-z0-9_.-]+#[0-9]+' | sort -u); do
   case "$ref" in https://*) ref=$(sed -E 's#^https://github\.com/([^/]+)/([^/]+)/pull/([0-9]+)$#\1/\2\#\3#' <<<"$ref") ;; esac
   [ "$ref" = "$pr" ] && continue
-  st=$(env -u GH_TOKEN -u GITHUB_TOKEN "$GH" pr view "${ref##*#}" -R "${ref%#*}" --json state --jq .state 2>/dev/null) || continue
-  [ "$st" = OPEN ] && hold "related_pr_open $ref"
+  st=$(env -u GH_TOKEN -u GITHUB_TOKEN "$GH" pr view "${ref##*#}" -R "${ref%#*}" --json state --jq .state 2>/dev/null) || hold "related_pr_unreadable $ref"
+  case "$st" in MERGED|CLOSED) ;; OPEN) hold "related_pr_open $ref" ;; *) hold "related_pr_state_unknown $ref state=${st:-none}" ;; esac
 done
 # A live deploy surface (runner, broker, pf-task, window tooling) is never merged while a device window is open.
 if [ "$repo" = pocketforge-os/pocketforge-automation ] && printf '%s\n' "$files" | grep -qE 'pf-kit-window|kit-window|pf-task|broker|pf-kit-step|install-pf-kit'; then
   for rj in "$WIN"/*/runner.json; do
     [ -e "$rj" ] || continue
-    case "$(jq -r '.State // empty' "$rj" 2>/dev/null)" in open|opening|closing) hold "deploy_surface_while_window_open gen=$(basename "$(dirname "$rj")")" ;; esac
+    wst=$(jq -er '.State | strings' "$rj" 2>/dev/null) || hold "window_state_unreadable gen=$(basename "$(dirname "$rj")")"
+    case "$wst" in open|opening|closing) hold "deploy_surface_while_window_open gen=$(basename "$(dirname "$rj")")" ;; esac
   done
 fi
+# Re-read the head right before merging. The merge gate pins its own read (--match-head-commit), and the post-merge
+# check below proves the merged head is the lane's head= (a push in between would otherwise merge unannounced).
+live=$(env -u GH_TOKEN -u GITHUB_TOKEN "$GH" pr view "$n" -R "$repo" --json headRefOid --jq .headRefOid 2>/dev/null) || hold pr_unreadable_pre_merge
+[ "$live" = "$head" ] || hold "head_moved_pre_merge live=$live"
 mo=$("$MERGE" "$pr" 2>&1); mrc=$?
 echo "$(ts) MERGE run=$run pr=$pr head=$head rc=$mrc $(printf '%s' "$mo" | tail -n 2 | tr '\n' ' ' | cut -c1-300)" >> "$MLOG"
 [ "$mrc" -eq 0 ] || hold "merge_refused rc=$mrc $(printf '%s' "$mo" | grep -oE '(REFUSED|reason=)[^ ]*' | head -n2 | tr '\n' ' ')"
-mj=$(env -u GH_TOKEN -u GITHUB_TOKEN "$GH" pr view "$n" -R "$repo" --json state,mergeCommit 2>/dev/null)
+mj=$(env -u GH_TOKEN -u GITHUB_TOKEN "$GH" pr view "$n" -R "$repo" --json state,mergeCommit,headRefOid 2>/dev/null)
 [ "$(jq -r .state <<<"$mj")" = MERGED ] || hold merge_not_observed
+mh=$(jq -r '.headRefOid // empty' <<<"$mj"); [ "$mh" = "$head" ] || hold "merged_head_differs merged=${mh:-unknown} (gate-checked, but not the head= the lane handed back)"
 msha=$(jq -r '.mergeCommit.oid // "?"' <<<"$mj")
 # Close-out is never the lane's: bd close's close_gate removes the bead's worktree set under the live run (10-13 rdp
 # pft-7637b9a7). Record it for gpu-14 to close at run release (release-run.sh, then bd-close-safe.sh).
@@ -98,7 +104,7 @@ if [ -s "$qf" ]; then
     fi
     tmp=$(mktemp "$qf.XXXX"); awk -v l="$line" 'f || $0!=l {print; next} {f=1}' "$qf" > "$tmp" && mv "$tmp" "$qf"
   fi
-  flock -u 8
+  # The lock stays held through delivery (fd 8 closes at exit), so a failed send restores without racing other writers.
 fi
 if [ -z "$next" ]; then echo "MERGE_READY_MERGED_NO_NEXT pr=$pr head=$head merge=$msha"; exit 11; fi
 note=$(awk '{$1=""; sub(/^[[:space:]]+/,""); print}' <<<"$line")
@@ -111,7 +117,7 @@ NEXT ASSIGNMENT: bead $next${note:+ ($note)}
 1. cd /home/matt/mission-control && bd show $next ; verify Start Preconditions; bd update $next --claim
    If its acceptance is ALREADY met (merged or done elsewhere), post a bd comment with the evidence and end: $TOK state=HANDBACK reason=ALREADY_COMPLETE bead=$next acceptance=met
 2. Fresh worktree from CURRENT main (never reuse the previous bead's branch): pf-wt create $next --repos <repo(s)> ; in each: git fetch origin main && git merge --ff-only origin/main
-3. Bring-up mode (owner D1): keep the PR under ~400 changed lines; add no scope after approval; one review plus at most one same-reviewer re-look; a finding not caused by this PR's own change gets the reply "declined, routed to <new bead>" and its thread resolved. Resolve all your threads before MERGE_READY.
+3. Bring-up mode (owner D1): keep the PR under ~400 changed lines; add no scope after approval; one review, then one same-reviewer --continue re-look that is VERIFY-ONLY on the final head (scoped to the fix commits) and is the exact-head approval pf-pr-merge needs; if it finds a defect in a fix commit, one fix plus one more verify-only pass; a finding not caused by this PR's own change gets the reply "declined, routed to <new bead>" and its thread resolved. Resolve all your threads before MERGE_READY.
 4. When review is approved at the exact head and CI is green, end with: $TOK state=HANDBACK reason=MERGE_READY pr=<owner/repo>#<n> head=<40-hex> bead=<id> acceptance=met|device_proof bead_complete=yes|no (no = more PRs or device proof remain; add producer_run=<head> if the PR changes a gate, workflow or harness; add paired=<owner/repo#n> if another PR must merge with it).
 EOF
 so=$("$SEND" "$run" "$mf" "mr-next-$next" "$TOK" 2>&1); src=$?
