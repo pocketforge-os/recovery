@@ -114,7 +114,14 @@ setup; mkpkg $G1; echo "$RAWSHA build16 battery regression" >> "$S/root/image-de
 has "$o" 'C2deny result=FAIL.*override_refused=not_overridable' && has "$o" 'result=FAIL failed=C2deny' && ok C2deny_not_overridable || no C2deny_not_overridable "$o"
 setup; mkpkg $G1; rm "$S/root/image-denylist.txt"; o=$(kp $G1); has "$o" 'C2deny result=FAIL reason=denylist_unreadable' && ok C2deny_missing_fails_closed || no C2deny_missing_fails_closed "$o"
 setup; mkpkg $G1; rm "$S/clone/scripts/pf-kit-step"; o=$(kp $G1); has "$o" 'C3 result=FAIL.*deployed_pf_kit_step_missing' && ok C3_checker_missing_fails_closed || no C3_checker_missing_fails_closed "$o"
-setup; mkpkg $G1 none; sed -i '/referenced plan/,$d' "$PKG/OPERATOR.md"; seal "$PKG"; o=$(kp $G1); has "$o" 'C3 result=PASS.*entry=none\(step-driven.*step_checks=1' && ok C3_step_driven_needs_step_checks || no C3_step_driven_needs_step_checks "$o"
+# Step-driven kits (no ENTRYPOINT, no referenced plan) need a sealed, complete STEP_DRIVEN=<n> (recovery#14 re-look).
+sdpkg() {  # sdpkg <PREFLIGHT lines> <n step files>
+  PREFLIGHT_DECL=$1 mkpkg $G1 none; sed -i '/referenced plan/,$d' "$PKG/OPERATOR.md"
+  for i in $(seq 1 "$2"); do printf '{"AnchorSHA256":"@A@","Generation":"%s","Step":{"Type":"dutexec","Command":"x"}}\n' $G1 > "$PKG/step$i.json"; done; seal "$PKG"; }
+setup; sdpkg '' 0; o=$(kp $G1); has "$o" 'C3 result=FAIL.*entry_unchecked' && ok C3_undeclared_step_driven_fails || no C3_undeclared_step_driven_fails "$o"
+setup; sdpkg $'STEP_DRIVEN=2\nSTEP=step1.json' 1; o=$(kp $G1); has "$o" 'C3 result=FAIL.*step_driven_incomplete:STEP_DRIVEN=2 declared_STEP=1' && ok C3_step_driven_partial_fails || no C3_step_driven_partial_fails "$o"
+setup; sdpkg $'STEP_DRIVEN=2\nSTEP=step1.json\nSTEP=step2.json' 2; o=$("$KP" "$PKG" $G1 "$OWN" 3 2>&1); has "$o" 'C3 result=FAIL.*step_driven_count_mismatch:STEP_DRIVEN=2 window_steps=3' && ok C3_step_driven_count_mismatch_fails || no C3_step_driven_count_mismatch_fails "$o"
+setup; sdpkg $'STEP_DRIVEN=2\nSTEP=step1.json\nSTEP=step2.json' 2; o=$(kp $G1); has "$o" 'C3 result=PASS.*entry=none\(step-driven STEP_DRIVEN=2\).*step_checks=3' && ok C3_step_driven_complete_passes || no C3_step_driven_complete_passes "$o"
 setup; mkpkg $G1; o=$(kp $G1); has "$o" 'C8 result=SKIP reason=stagepy_request_not_staged_yet' && ok C8_stagepy_skip_named || no C8_stagepy_skip_named "$o"
 setup; mkpkg $G1; rm "$PKG/STAGE.py"; seal "$PKG"; o=$(kp $G1); has "$o" 'C8 result=FAIL reason=no_boot_open_request' && ok C8_native_missing_request_fails || no C8_native_missing_request_fails "$o"
 setup; mkpkg $G1; echo 'not json' > "$PKG/boot-open-request.template.json"; seal "$PKG"; o=$(kp $G1); has "$o" 'C8 result=FAIL reason=boot_open_request_unreadable' && ok C8_unreadable_fails || no C8_unreadable_fails "$o"

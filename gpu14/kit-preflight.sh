@@ -31,6 +31,7 @@
 #   IMAGE_PATHS=none       the window executes no /opt/pocketforge path, so checked=0 is a real PASS (7 of 9 image
 #                          PASS lines on 10-16 were a vacuous checked=0).
 #   IMAGE=<path>           a local raw image to verify against RawSHA256 when it is not package-local or in build*-publish.
+#   STEP_DRIVEN=<n>        no entrypoint: the lane drives exactly n step requests, all declared with STEP= (C3)
 #   STEP=<path>            a pre-built step request (relative to the package) to run through the deployed
 #                          `pf-kit-step --check` (pure static: no generation argument, no window state; read 2026-10-16).
 #
@@ -211,7 +212,7 @@ c2() {
 
 # ---------------------------------------------------------------- C3 entrypoints
 c3() {
-  local why=() notes=() entry="" e f tmp out n=0 decl_entry
+  local why=() notes=() entry="" e f tmp out n=0 decl_entry sd nstep
   decl_entry=$(decl ENTRYPOINT | tail -1)
   if [ -n "$decl_entry" ]; then
     case "$decl_entry" in /*) e=$decl_entry ;; *) e=$P/$decl_entry ;; esac
@@ -225,8 +226,13 @@ c3() {
     if [ -n "$entry" ]; then notes+=("entry=$(basename "$entry") source=plan_heuristic"); n=$((n+1))
     else why+=("plan_has_no_executor:plan=$PLAN_REF"); fi
   else
-    # Step-driven kit (the lane drives pf-kit-step requests): acceptable only because every step is checked below.
-    notes+=("entry=none(step-driven; no ENTRYPOINT and no referenced plan)")
+    # Step-driven kit (the lane drives pf-kit-step requests). recovery#14 re-look: only with a sealed STEP_DRIVEN=<n>
+    # that names the complete step set: exactly n STEP= requests, n equal to the window's step count, each checked below.
+    sd=$(decl STEP_DRIVEN | tail -1); nstep=$(decl STEP | grep -c . || true)
+    if ! [[ $sd =~ ^[1-9][0-9]*$ ]]; then why+=("entry_unchecked:declare_ENTRYPOINT=_or_STEP_DRIVEN=<n>_with_n_STEP=_requests")
+    elif [ "$nstep" -ne "$sd" ]; then why+=("step_driven_incomplete:STEP_DRIVEN=$sd declared_STEP=$nstep")
+    elif [ -n "$STEPS" ] && [ "$STEPS" != "$sd" ]; then why+=("step_driven_count_mismatch:STEP_DRIVEN=$sd window_steps=$STEPS")
+    else notes+=("entry=none(step-driven STEP_DRIVEN=$sd)"); fi
   fi
   # A plan that ships a strict manifest must still match it (plans are referenced in place, never sealed).
   if [ -n "$PLAN_REF" ] && [ -f "$PLAN_REF/SHA256SUMS" ]; then
