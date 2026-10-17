@@ -175,7 +175,12 @@ process_row() {
   while :; do
     st=$(jq -r '.State // empty' "$WIN/$G/runner.json" 2>/dev/null)
     case "$st" in
-      closed) finish "runner_closed:$(jq -r '.Reason // "unknown"' "$WIN/$G/terminal.json" 2>/dev/null)"; return 0 ;;
+      closed)
+        # Only an explicit success advances the queue; failure, timeout, abort, unknown or unreadable all STOP.
+        m=$(jq -r '.Reason | strings' "$WIN/$G/terminal.json" 2>/dev/null)
+        [ "$m" = success ] && { finish runner_closed:success; return 0; }
+        finish "runner_closed:${m:-unreadable}"
+        stop runner_closed_non_success "runner self-closed $G with Reason='${m:-missing or unreadable terminal.json}'; diagnose before the next window" ;;
       failed)
         [ -f "$WIN/$G/terminal.json" ] && stop teardown_failed "runner terminal State=failed for $G"
         why=$(jq -r '.Reason // "unknown"' "$WIN/$G/failure.json" 2>/dev/null)

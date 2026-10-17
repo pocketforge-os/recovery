@@ -139,7 +139,8 @@ c2() {
   rawbytes=$(cat "$P"/seed-kit/felboot-request*.json 2>/dev/null | grep -oE '"RawBytes": *[0-9]+' | grep -oE '[0-9]+$' | sort -u | head -1)
   # gpu-14 2026-10-16 D4a answer 2b: Build 16 never runs (battery regression). The denylist is gpu-14's file; one
   # sha256 per line, first field. Not overridable.
-  if [ -f "$DENY" ] && awk -v r="$RAW" '!/^[[:space:]]*#/ && tolower($1)==r {f=1} END {exit !f}' "$DENY"; then
+  if [ ! -f "$DENY" ] || [ ! -r "$DENY" ]; then emit C2deny FAIL "denylist_unreadable path=$DENY"
+  elif awk -v r="$RAW" '!/^[[:space:]]*#/ && tolower($1)==r {f=1} END {exit !f}' "$DENY"; then
     emit C2deny FAIL "image_denylisted raw=$RAW note=\"$(clean "$(awk -v r="$RAW" 'tolower($1)==r {$1=""; print; exit}' "$DENY")")\""
   else emit C2deny PASS "raw=${RAW:0:12} not_in=$(basename "$DENY")"; fi
   # Local raw candidates, in order: declared IMAGE=, the package-local hardlink, gpu-14's build*-publish dirs.
@@ -224,7 +225,8 @@ c3() {
     if [ -n "$entry" ]; then notes+=("entry=$(basename "$entry") source=plan_heuristic"); n=$((n+1))
     else why+=("plan_has_no_executor:plan=$PLAN_REF"); fi
   else
-    notes+=("entry=unchecked(no ENTRYPOINT and OPERATOR.md names no referenced plan)")
+    # Step-driven kit (the lane drives pf-kit-step requests): acceptable only because every step is checked below.
+    notes+=("entry=none(step-driven; no ENTRYPOINT and no referenced plan)")
   fi
   # A plan that ships a strict manifest must still match it (plans are referenced in place, never sealed).
   if [ -n "$PLAN_REF" ] && [ -f "$PLAN_REF/SHA256SUMS" ]; then
@@ -259,10 +261,10 @@ PY
     rm -rf -- "$tmp"
     notes+=("step_checks=${#files[@]}")
   else
-    notes+=("step_check=skipped(no deployed pf-kit-step at runner clone '${D:-unknown}')")
+    why+=("deployed_pf_kit_step_missing:runner=${D:-unknown}")
   fi
   if [ ${#why[@]} -gt 0 ]; then emit C3 FAIL "$(join "${why[@]}") ${notes[*]}"
-  elif [ "$n" -eq 0 ]; then emit C3 SKIP "${notes[*]}"
+  elif [ "$n" -eq 0 ]; then emit C3 FAIL "nothing_checked ${notes[*]}"
   else emit C3 PASS "${notes[*]}"; fi
 }
 
@@ -303,9 +305,17 @@ c7() {
 c8() {
   local t bkd out
   t=""; for f in "$P/boot-open-request.template.json" "$P/boot-open-request.json"; do [ -f "$f" ] && { t=$f; break; }; done
-  [ -n "$t" ] || { emit C8 SKIP "no_boot_open_request_template"; return; }
-  bkd=$(jq -r '.BaseKitDirectory // empty' "$t" 2>/dev/null)
-  [ -n "$bkd" ] || { emit C8 SKIP "no_BaseKitDirectory template=$(basename "$t")"; return; }
+  if [ -z "$t" ]; then
+    # STAGE.py kits write boot-open-request.json at staging, after preflight; the runner's boot-open runs the same
+    # sealed_inventory before any power action (kwin4: refused in 1 s), so that is the enforcing gate for them.
+    if [ -f "$P/STAGE.py" ]; then emit C8 SKIP "stagepy_request_not_staged_yet (runner enforces sealed_inventory at boot-open)"
+    else emit C8 FAIL "no_boot_open_request"; fi
+    return
+  fi
+  if ! jq -e 'type == "object"' "$t" >/dev/null 2>&1; then emit C8 FAIL "boot_open_request_unreadable template=$(basename "$t")"; return; fi
+  if ! jq -e 'has("BaseKitDirectory")' "$t" >/dev/null; then emit C8 SKIP "no_resume_base template=$(basename "$t") (fresh boot; nothing to seal)"; return; fi
+  bkd=$(jq -r '.BaseKitDirectory | strings' "$t")
+  [ -n "$bkd" ] || { emit C8 FAIL "BaseKitDirectory_invalid template=$(basename "$t")"; return; }
   [ -f "$D/scripts/lib/pf_kit_session_resume.py" ] || { emit C8 FAIL "deployed_resume_lib_missing runner=${D:-unknown}"; return; }
   out=$(cd "$D/scripts/lib" && python3 -I -c '
 import sys; sys.path.insert(0, ".")

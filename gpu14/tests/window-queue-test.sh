@@ -67,6 +67,8 @@ esac
 mkdir -p "$W/$G"; echo "CHAIN boot-open start"; echo "CHAIN boot-open rc=0 PF_KIT_WINDOW_RUNNER state=boot-open"; echo "NETREADY_WATCH_SENT host=x gen=$G"
 case "${FAKE_FINAL:-}" in
   timeout) echo '{"State":"closed"}' > "$W/$G/runner.json"; echo '{"Reason":"timeout","State":"closed"}' > "$W/$G/terminal.json" ;;
+  selfsuccess) echo '{"State":"closed"}' > "$W/$G/runner.json"; echo '{"Reason":"success","State":"closed"}' > "$W/$G/terminal.json" ;;
+  noterminal) echo '{"State":"closed"}' > "$W/$G/runner.json" ;;
   failed) echo '{"State":"failed"}' > "$W/$G/runner.json"; echo '{"Reason":"session_result_invalid"}' > "$W/$G/failure.json" ;;
   *) echo '{"State":"open"}' > "$W/$G/runner.json" ;;
 esac
@@ -110,6 +112,14 @@ setup; mkpkg $G1; printf 'BOOTSTRAP = "other"\n' > "$S/clone/scripts/lib/pf_kit_
 setup; mkpkg $G1; echo 'IMAGE_PATHS=none' > "$PKG/PREFLIGHT"; o=$(kp $G1); has "$o" 'C1 result=FAIL.*preflight_declarations_unsealed' && ok C1_decl_unsealed || no C1_decl_unsealed "$o"
 setup; mkpkg $G1; echo "$RAWSHA build16 battery regression" >> "$S/root/image-denylist.txt"; o=$(KIT_PREFLIGHT_OVERRIDE_C2deny="owner said fine really" kp $G1)
 has "$o" 'C2deny result=FAIL.*override_refused=not_overridable' && has "$o" 'result=FAIL failed=C2deny' && ok C2deny_not_overridable || no C2deny_not_overridable "$o"
+setup; mkpkg $G1; rm "$S/root/image-denylist.txt"; o=$(kp $G1); has "$o" 'C2deny result=FAIL reason=denylist_unreadable' && ok C2deny_missing_fails_closed || no C2deny_missing_fails_closed "$o"
+setup; mkpkg $G1; rm "$S/clone/scripts/pf-kit-step"; o=$(kp $G1); has "$o" 'C3 result=FAIL.*deployed_pf_kit_step_missing' && ok C3_checker_missing_fails_closed || no C3_checker_missing_fails_closed "$o"
+setup; mkpkg $G1 none; sed -i '/referenced plan/,$d' "$PKG/OPERATOR.md"; seal "$PKG"; o=$(kp $G1); has "$o" 'C3 result=PASS.*entry=none\(step-driven.*step_checks=1' && ok C3_step_driven_needs_step_checks || no C3_step_driven_needs_step_checks "$o"
+setup; mkpkg $G1; o=$(kp $G1); has "$o" 'C8 result=SKIP reason=stagepy_request_not_staged_yet' && ok C8_stagepy_skip_named || no C8_stagepy_skip_named "$o"
+setup; mkpkg $G1; rm "$PKG/STAGE.py"; seal "$PKG"; o=$(kp $G1); has "$o" 'C8 result=FAIL reason=no_boot_open_request' && ok C8_native_missing_request_fails || no C8_native_missing_request_fails "$o"
+setup; mkpkg $G1; echo 'not json' > "$PKG/boot-open-request.template.json"; seal "$PKG"; o=$(kp $G1); has "$o" 'C8 result=FAIL reason=boot_open_request_unreadable' && ok C8_unreadable_fails || no C8_unreadable_fails "$o"
+setup; mkpkg $G1; echo '{"FelBootRequest":"x"}' > "$PKG/boot-open-request.template.json"; seal "$PKG"; o=$(kp $G1); has "$o" 'C8 result=SKIP reason=no_resume_base' && ok C8_no_resume_base_skip || no C8_no_resume_base_skip "$o"
+setup; mkpkg $G1; echo '{"BaseKitDirectory":7}' > "$PKG/boot-open-request.template.json"; seal "$PKG"; o=$(kp $G1); has "$o" 'C8 result=FAIL reason=BaseKitDirectory_invalid' && ok C8_bad_base_fails || no C8_bad_base_fails "$o"
 setup; mkpkg $G1; rm -rf "$S/root/build99-publish"; o=$(kp $G1); has "$o" 'C2 result=FAIL reason=no_local_image' && ok C2_no_image || no C2_no_image "$o"
 o=$(KIT_PREFLIGHT_OVERRIDE_C2="image verified by hand on pf-node" kp $G1); has "$o" 'C2 result=PASS reason=override:no_local_image.*override="image verified by hand on pf-node"' && has "$o" 'result=PASS.*overrides=C2' && ok C2_override_echoed || no C2_override_echoed "$o"
 o=$(KIT_PREFLIGHT_OVERRIDE_C2="short" kp $G1); has "$o" 'override_refused=reason_too_short' && ok override_too_short || no override_too_short "$o"
@@ -148,7 +158,9 @@ qsetup; touch "$FB/window-queue.pause"; o=$("$WQ" --drain 2>&1); rc=$?; [ $rc = 
 qsetup; o=$(FAKE_DONE=success FAKE_PAUSE_DURING=1 "$WQ" --drain 2>&1); rc=$?; [ $rc = 0 ] && has "$o" 'reason=paused' && [ "$(grep -c LANE_STATUS "$S/chain-calls")" = 1 ] && grep -q "$G2" "$FB/window-queue.tsv" && ok pause_drains_after_current || no pause_drain "$o"
 qsetup; mkdir -p "$S/kw/ffffffffffffffffffffffffffffffff"; echo '{"State":"open"}' > "$S/kw/ffffffffffffffffffffffffffffffff/runner.json"; o=$("$WQ" --drain 2>&1); rc=$?
 [ $rc = 5 ] && has "$o" other_window_open && [ ! -f "$S/chain-calls" ] && grep -q "$G1" "$FB/window-queue.tsv" && ok other_window_open_refused || no other_window "$o"
-qsetup; o=$(FAKE_FINAL=timeout "$WQ" --once 2>&1); [ ! -f "$S/close-calls" ] && grep -q "runner_closed:timeout" "$FB/window-queue.done.tsv" && ok terminal_runner_self_closed || no terminal_timeout "$o"
+qsetup; o=$(FAKE_FINAL=timeout "$WQ" --once 2>&1); rc=$?; [ $rc = 10 ] && has "$o" 'stop:runner_closed_non_success' && [ ! -f "$S/close-calls" ] && grep -q "runner_closed:timeout" "$FB/window-queue.done.tsv" && [ -f "$FB/window-queue.pause" ] && ok self_closed_timeout_stops || no self_closed_timeout_stops "$o"
+qsetup; o=$(FAKE_FINAL=noterminal "$WQ" --once 2>&1); rc=$?; [ $rc = 10 ] && has "$o" 'stop:runner_closed_non_success' && grep -q "runner_closed:unreadable" "$FB/window-queue.done.tsv" && ok self_closed_no_terminal_stops || no self_closed_no_terminal_stops "$o"
+qsetup; o=$(FAKE_FINAL=selfsuccess "$WQ" --once 2>&1); rc=$?; [ $rc = 0 ] && grep -q "runner_closed:success" "$FB/window-queue.done.tsv" && [ ! -f "$FB/window-queue.pause" ] && ok self_closed_success_advances || no self_closed_success_advances "$o"
 qsetup; o=$(FAKE_FINAL=failed "$WQ" --drain 2>&1); rc=$?; grep -q "^$G1 failure" "$S/close-calls" && grep -q "closed:failure" "$FB/window-queue.done.tsv" && [ $rc = 10 ] && grep -q 'reason=runner_failed' "$FB/window-queue.pause" && [ "$(grep -c LANE_STATUS "$S/chain-calls")" = 1 ] && ok terminal_runner_failed_closes_then_stops || no terminal_failed "$o"
 qsetup; o=$("$WQ" --done-from-status "X_STATUS state=WINDOW_DONE gen=$G1 plan=incomplete" 2>&1); [ "$(cut -f1 "$FB/window-done/$G1")" = failure ] && o2=$("$WQ" --done "$G2" complete 2>&1) && [ "$(cut -f1 "$FB/window-done/$G2")" = success ] && ok done_plan_maps_to_close || no done_plan_map "$o $o2"
 qsetup; o=$(FAKE_FINAL=failed "$WQ" --drain 2>&1); o2=$("$WQ" --resume 2>&1); r2=$?; o3=$("$WQ" --resume incomplete 2>&1); r3=$?; [ $r2 = 2 ] && [ $r3 = 0 ] && [ ! -f "$FB/window-queue.pause" ] && ls "$FB"/window-queue.pause.resolved-* >/dev/null 2>&1 && has "$("$WQ" --status 2>&1)" 'paused=0' && ok resume_after_stop || no resume_after_stop "$o2 | $o3"
