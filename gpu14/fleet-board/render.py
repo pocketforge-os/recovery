@@ -12,9 +12,10 @@ import json
 import os
 import sys
 
-BOARD = os.path.dirname(os.path.abspath(__file__))
+BOARD = os.environ.get("FB_BOARD_DIR") or os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(BOARD, "data.json")
 OUT = os.path.join(BOARD, "fleet-board.html")
+VELOCITY = os.path.join(BOARD, "velocity.json")
 
 FONTS = ("https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,400..700"
          "&family=JetBrains+Mono:wght@400;600&display=swap")
@@ -527,6 +528,14 @@ tr.row-unknown td { background: color-mix(in srgb, var(--raised) 60%, var(--surf
 [hidden] { display: none !important; }
 tr[hidden] { display: none !important; }
 
+/* velocity (tsp-mc9m.41.1030.18): inline SVG, page palette, scrolls like the tables at phone width */
+.vel-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
+.vel-key { display: inline-block; width: 16px; height: 3px; background: var(--k); margin-right: 6px; vertical-align: middle; }
+.vel-key.dash { background: repeating-linear-gradient(90deg, var(--k) 0 4px, transparent 4px 7px); }
+.vel { padding: 6px 8px; }
+.vel svg { display: block; width: 100%; min-width: 600px; height: auto; }
+.vel-wow { margin: 4px 0 6px; color: var(--ink-2); font-size: 13px; }
+
 @media (max-width: 600px) {
   h1 { font-size: 19px; }
   .tile .v { font-size: 24px; }
@@ -576,6 +585,80 @@ JS = r"""
 """
 
 
+def vel_svg(days, label):
+    """One inline SVG: opened/closed 7-day means (left axis) + backlog dashed (right axis)."""
+    W, H = 720, 210
+    ML, MR, MT, MB = 34, 34, 8, 22
+    iw, ih = W - ML - MR, H - MT - MB
+    n = len(days)
+    rate_max = max(max(d["opened_ma7"], d["closed_ma7"]) for d in days) or 1.0
+    bl_max = max(d["backlog"] for d in days) or 1
+
+    def x(i):
+        return ML + iw * i / max(n - 1, 1)
+
+    def yr(v):
+        return MT + ih * (1 - v / rate_max)
+
+    def yb(v):
+        return MT + ih * (1 - v / bl_max)
+
+    def pts(key, yf):
+        return " ".join(f"{x(i):.1f},{yf(d[key]):.1f}" for i, d in enumerate(days))
+
+    p = [f'<svg viewBox="0 0 {W} {H}" role="img" aria-label="{e(label)}">']
+    for k in range(5):
+        v = rate_max * k / 4
+        yy = yr(v)
+        p.append(f'<line x1="{ML}" y1="{yy:.1f}" x2="{W - MR}" y2="{yy:.1f}" stroke="var(--rule)"/>')
+        p.append(f'<text x="{ML - 5}" y="{yy + 3:.1f}" text-anchor="end" font-size="10" fill="var(--muted)">{v:.1f}</text>')
+    p.append(f'<text x="{W - MR + 5}" y="{MT + 9}" font-size="10" fill="var(--warn)">{bl_max}</text>')
+    p.append(f'<text x="{W - MR + 5}" y="{H - MB + 3:.1f}" font-size="10" fill="var(--warn)">0</text>')
+    for i in range(0, n, 7):
+        p.append(f'<text x="{x(i):.1f}" y="{H - 6}" text-anchor="middle" font-size="10" fill="var(--muted)">{days[i]["date"][5:]}</text>')
+    p.append(f'<polyline fill="none" stroke="var(--info)" stroke-width="2" points="{pts("opened_ma7", yr)}"/>')
+    p.append(f'<polyline fill="none" stroke="var(--good)" stroke-width="2" points="{pts("closed_ma7", yr)}"/>')
+    p.append(f'<polyline fill="none" stroke="var(--warn)" stroke-width="1.5" stroke-dasharray="4 3" points="{pts("backlog", yb)}"/>')
+    p.append("</svg>")
+    return "".join(p)
+
+
+def vel_wow(name, w):
+    pct, l7, p7 = w.get("pct"), w.get("last7_closed", 0), w.get("prev7_closed", 0)
+    if pct is None:
+        txt = "no closes in the previous week to compare against"
+    elif pct < 0:
+        txt = f"closing {abs(pct):g}% slower than the week before"
+    elif pct > 0:
+        txt = f"closing {pct:g}% faster than the week before"
+    else:
+        txt = "close rate unchanged week over week"
+    return f'<p class="vel-wow"><b>{e(name)}</b> — {l7} closes in the last 7 days vs {p7} the week before: {e(txt)}.</p>'
+
+
+def render_velocity(d):
+    """(body, count) for the Velocity section, or None when velocity.json is absent/unreadable
+    (a velocity failure must never fail the board; refresh.sh prints the SOURCE_ERROR)."""
+    try:
+        v = json.load(open(VELOCITY))
+        sa, sf = v["series"]["all"], v["series"]["ffb"]
+        win = v["window"]
+    except Exception:
+        return None
+    legend = ('<p class="vel-legend"><span><i class="vel-key" style="--k:var(--info)"></i>opened/day, 7-d mean</span>'
+              '<span><i class="vel-key" style="--k:var(--good)"></i>closed/day, 7-d mean</span>'
+              '<span><i class="vel-key dash" style="--k:var(--warn)"></i>backlog (right axis)</span></p>')
+    body = [f'<p class="fine">Beads opened vs closed per UTC day, {e(win.get("start"))} … {e(win.get("end"))} '
+            f'({len(sa["days"])} days); backlog = created to date minus closed to date. Source: bd list --all via velocity.py.</p>', legend]
+    body.append("<h3>All beads (epics excluded)</h3>")
+    body.append(vel_wow("all", sa["wow"]))
+    body.append(f'<div class="scroll vel">{vel_svg(sa["days"], "all beads: opened and closed per day (7-day means) and backlog, last 60 days")}</div>')
+    body.append(f'<h3>First Functional Build — descendants of {e(v.get("ffb_root", "tsp-mc9m.60.29"))}</h3>')
+    body.append(vel_wow("ffb", sf["wow"]))
+    body.append(f'<div class="scroll vel">{vel_svg(sf["days"], "FFB descendants: opened and closed per day (7-day means) and backlog, last 60 days")}</div>')
+    return "".join(body), sum(x["closed"] for x in sa["days"])
+
+
 def main():
     d = json.load(open(DATA))
     s = d["summary"]
@@ -609,6 +692,10 @@ def main():
     body.append(f'<section class="strip" aria-label="summary">{strip}</section>')
     body.append(section("needs", "Needs gpu-14 now", s["needs"], render_needs(d),
                         "prioritized: merge-ready, handbacks, boot-ready kits, device, blocked, stale, undriven, newly unblocked"))
+    vel = render_velocity(d)
+    if vel is not None:
+        body.append(section("velocity", "Velocity", vel[1], vel[0],
+                            "opened vs closed per day (7-day means), backlog, week over week · last 60 UTC days"))
     body.append(section("lanes", "Lanes", s["lanes_total"], render_lanes(d),
                         f'managed worker runs with a drive log touched in the last {th["LANE_LOG_WINDOW_H"]} h; needs first, then unknown, waiting, running'))
     body.append(section("dispatch", "Dispatchable work", s["dispatchable"], render_dispatchable(d),
