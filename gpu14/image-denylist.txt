@@ -1,0 +1,2 @@
+# kit-preflight C2deny: raw image SHA256 (first field) that must never be flashed; gpu-14 owns this file (e.g. Build 16).
+da96be9a07a565e823d1ca568ec4ab7f79e062d5bb479d11bef8f46dd60bf004 Build 16 (battery driver regression; never runs; owner)
