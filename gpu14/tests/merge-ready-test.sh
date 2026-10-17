@@ -28,7 +28,7 @@ SH
 cat > "$T/bin/merge" <<'SH'
 #!/usr/bin/env bash
 [ "${FAKE_MERGE_RC:-0}" -eq 0 ] || { echo "REFUSED reason=fake"; exit "$FAKE_MERGE_RC"; }
-echo "merged $1"; echo MERGED > "$FAKE_DIR/state-${1##*#}"
+echo "$*" >> "$FAKE_DIR/merge-args"; echo "merged $1"; echo MERGED > "$FAKE_DIR/state-${1##*#}"
 SH
 cat > "$T/bin/send" <<'SH'
 #!/usr/bin/env bash
@@ -118,6 +118,7 @@ setup; mr "$L bead_complete=yes"
   && grep -q 'NEXT ASSIGNMENT: bead tsp-next.1 (do the thing)' "$S/sent-mr-next-tsp-next.1.txt" \
   && grep -q 'Do NOT run bd close' "$S/sent-mr-next-tsp-next.1.txt" \
   && grep -qP '^tsp-old\.2\trun1\to/r#5\tm3rge\tmet\t' "$S/root/fleet-board/close-pending.tsv" && ok complete_pops_next || no complete_pops_next "$rc $out"
+grep -qx "o/r#5 --expect-head $H" "$S/merge-args" && ok merge_passes_expect_head || no merge_passes_expect_head "$(cat "$S/merge-args" 2>&1)"
 
 setup; printf '# q\n\tBAD id\n' > "$S/root/fleet-board/lane-queue/fam.txt"; mr "$L bead_complete=yes"
 [ $rc -eq 11 ] && grep -q bad_queue_line <<<"$out" && grep -q BAD "$S/root/fleet-board/lane-queue/fam.txt" && ok bad_queue_line_rc11 || no bad_queue_line_rc11 "$rc $out"

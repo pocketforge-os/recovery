@@ -61,11 +61,11 @@ if [ "$repo" = pocketforge-os/pocketforge-automation ] && printf '%s\n' "$files"
     [ "$wst" = closed ] || hold "deploy_surface_while_window_not_closed gen=$(basename "$(dirname "$rj")") state=$wst"
   done
 fi
-# Re-read the head right before merging. The merge gate pins its own read (--match-head-commit), and the post-merge
-# check below proves the merged head is the lane's head= (a push in between would otherwise merge unannounced).
+# Re-read the head right before merging, then merge with --expect-head: pf-pr-merge refuses unless the head it reads is
+# the lane's head=, and its CI/review gates and --match-head-commit merge all bind to that read (recovery#13 re-look).
 live=$(env -u GH_TOKEN -u GITHUB_TOKEN "$GH" pr view "$n" -R "$repo" --json headRefOid --jq .headRefOid 2>/dev/null) || hold pr_unreadable_pre_merge
 [ "$live" = "$head" ] || hold "head_moved_pre_merge live=$live"
-mo=$("$MERGE" "$pr" 2>&1); mrc=$?
+mo=$("$MERGE" "$pr" --expect-head "$head" 2>&1); mrc=$?
 echo "$(ts) MERGE run=$run pr=$pr head=$head rc=$mrc $(printf '%s' "$mo" | tail -n 2 | tr '\n' ' ' | cut -c1-300)" >> "$MLOG"
 [ "$mrc" -eq 0 ] || hold "merge_refused rc=$mrc $(printf '%s' "$mo" | grep -oE '(REFUSED|reason=)[^ ]*' | head -n2 | tr '\n' ' ')"
 mj=$(env -u GH_TOKEN -u GITHUB_TOKEN "$GH" pr view "$n" -R "$repo" --json state,mergeCommit,headRefOid 2>/dev/null)
