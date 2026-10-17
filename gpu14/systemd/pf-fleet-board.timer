@@ -1,0 +1,10 @@
+[Unit]
+Description=Regenerate the fleet board every 15 min (served on the tailnet by tailscale serve)
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=15min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
