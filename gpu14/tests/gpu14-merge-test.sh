@@ -7,7 +7,7 @@
 # usage: gpu14-merge-test.sh      rc 0 all pass
 set -uo pipefail
 GM=${GM_SCRIPT:-$(cd "$(dirname "$0")/.." && pwd)/gpu14-merge.sh}
-T=$(mktemp -d "${TMPDIR:-/tmp}/gm-tests.XXXXXX"); trap '[ -n "${KEEP:-}" ] || rm -rf -- "$T"' EXIT
+T=$(mktemp -d "${TMPDIR:-/tmp}/gm-tests.XXXXXX"); trap '[ -n "${KEEP:-}" ] || { find "$T" -mindepth 1 -delete; rmdir -- "$T"; }' EXIT
 pass=0; fail=0
 ok() { pass=$((pass+1)); echo "PASS $1"; }
 no() { fail=$((fail+1)); echo "FAIL $1 :: ${2:-}"; }
@@ -20,22 +20,23 @@ printf '%s\n' "$@" > "$GM_ARGV"
 SH
 chmod +x "$T"/fake/* "$T"/ghonly/*
 # BASH_ENV on the coordinator laptop prepends ~/.local/bin, which would shadow the fakes.
-run() { env -u BASH_ENV PATH="$1:$PATH" GM_ARGV="$T/argv" bash "$GM" "${@:2}"; }
+# Each case records argv to its own fresh file ($T/argv-<case>), so nothing is removed between cases.
+run() { env -u BASH_ENV PATH="$1:$PATH" GM_ARGV="$T/argv-$C" bash "$GM" "${@:2}"; }
 
-rm -f "$T/argv"; o=$(run "$T/fake" own/repo#7 --expect-head "$H" 2>&1); rc=$?
+C=1; o=$(run "$T/fake" own/repo#7 --expect-head "$H" 2>&1); rc=$?
 exp=$(printf '%s\n' pf-pr-merge.sh own/repo#7 --expect-head "$H")
-[ "$rc" -eq 0 ] && [ "$(cat "$T/argv" 2>/dev/null)" = "$exp" ] && ok forwards_expect_head_after_ref \
-  || no forwards_expect_head_after_ref "rc=$rc argv=$(tr '\n' ' ' < "$T/argv" 2>/dev/null) out=$o"
+[ "$rc" -eq 0 ] && [ "$(cat "$T/argv-$C" 2>/dev/null)" = "$exp" ] && ok forwards_expect_head_after_ref \
+  || no forwards_expect_head_after_ref "rc=$rc argv=$(tr '\n' ' ' < "$T/argv-$C" 2>/dev/null) out=$o"
 
-rm -f "$T/argv"; o=$(run "$T/fake" --vendor-ok 'src@abc reason' own/repo#7 --allow-red x --expect-head "$H" 2>&1); rc=$?
+C=2; o=$(run "$T/fake" --vendor-ok 'src@abc reason' own/repo#7 --allow-red x --expect-head "$H" 2>&1); rc=$?
 exp=$(printf '%s\n' pf-pr-merge.sh own/repo#7 --allow-red x --expect-head "$H")
-[ "$rc" -eq 0 ] && [ "$(cat "$T/argv" 2>/dev/null)" = "$exp" ] && ok forwards_all_args_after_vendor_ok \
-  || no forwards_all_args_after_vendor_ok "rc=$rc argv=$(tr '\n' ' ' < "$T/argv" 2>/dev/null) out=$o"
+[ "$rc" -eq 0 ] && [ "$(cat "$T/argv-$C" 2>/dev/null)" = "$exp" ] && ok forwards_all_args_after_vendor_ok \
+  || no forwards_all_args_after_vendor_ok "rc=$rc argv=$(tr '\n' ' ' < "$T/argv-$C" 2>/dev/null) out=$o"
 
 if [ "${GM_REAL:-1}" = 0 ]; then echo "SKIP real_parser_knows_expect_head (GM_REAL=0)"
 elif ! command -v pf-automation-tool >/dev/null; then echo "SKIP real_parser_knows_expect_head (no pf-automation-tool)"
 else
-  o=$(run "$T/ghonly" pocketforge-os/recovery#1 --expect-head NOT-A-SHA 2>&1); rc=$?
+  C=3; o=$(run "$T/ghonly" pocketforge-os/recovery#1 --expect-head NOT-A-SHA 2>&1); rc=$?
   if [ "$rc" -ne 0 ] && grep -q -- '--expect-head requires a full commit sha' <<<"$o" && ! grep -q 'unknown option' <<<"$o"; then
     ok real_parser_knows_expect_head
   else no real_parser_knows_expect_head "rc=$rc out=$(tail -n 3 <<<"$o" | tr '\n' ' ')"; fi
