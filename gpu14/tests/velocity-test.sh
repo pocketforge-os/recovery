@@ -227,10 +227,21 @@ fi
 S4=$T/refresh-bad; mkdir -p "$S4"
 cp "$FB/refresh.sh" "$FB/velocity.py" "$FB/render.py" "$S4/"
 cp "$S3/collect.py" "$S4/"
+# a valid but STALE snapshot from an earlier refresh (older than the fixture data.json): must not be shown
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); v["generated_at"]="2026-06-29T00:00:00Z"; json.dump(v,open(sys.argv[2],"w"))' "$T/v.json" "$S4/velocity.json"
 printf '#!/bin/sh\necho "not json at all"\n' > "$S4/bdstub"
 chmod +x "$S4/bdstub"
 o=$(FB_BOARD_DIR="$S4" FB_BD_BIN="$S4/bdstub" FB_DATA_FIXTURE="$T/data-fixture.json" FB_ROWS_FIXTURE="$T/rows.json" bash "$S4/refresh.sh" 2>&1); rc=$?
 [ $rc = 0 ] && has "$o" "SOURCE_ERROR source='velocity'" && ok refresh_velocity_failure_nonfatal || no refresh_velocity_failure_nonfatal "rc=$rc $o"
 [ $rc = 0 ] && [ -f "$S4/fleet-board.html" ] && has "$o" 'RENDER ok|BOARD' && ok refresh_board_still_renders || no refresh_board_still_renders "rc=$rc $(tail -3 <<<"$o")"
+[ $rc = 0 ] && ! grep -q 'id="velocity"' "$S4/fleet-board.html" 2>/dev/null && ! [ -e "$S4/velocity.json" ] && ok refresh_failure_drops_stale_velocity || no refresh_failure_drops_stale_velocity "section=$(grep -c 'id="velocity"' "$S4/fleet-board.html" 2>/dev/null) file=$([ -e "$S4/velocity.json" ] && echo kept || echo gone)"
+
+# --- S10: render.py alone refuses a velocity.json older than data.json (cleanup-independent) --
+S5=$T/render-stale; mkdir -p "$S5"
+cp "$FB/render.py" "$S5/render.py"
+cp "$T/data-fixture.json" "$S5/data.json"
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); v["generated_at"]="2026-06-29T00:00:00Z"; json.dump(v,open(sys.argv[2],"w"))' "$T/v.json" "$S5/velocity.json"
+o=$(FB_BOARD_DIR="$S5" python3 "$S5/render.py" 2>&1); rc=$?
+[ $rc = 0 ] && has "$o" 'RENDER ok' && ! grep -q 'id="velocity"' "$S5/fleet-board.html" && ok render_refuses_stale_velocity || no render_refuses_stale_velocity "rc=$rc section=$(grep -c 'id="velocity"' "$S5/fleet-board.html" 2>/dev/null)"
 
 echo "TESTS pass=$pass fail=$fail"; [ "$fail" = 0 ]

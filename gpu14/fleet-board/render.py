@@ -638,12 +638,15 @@ def vel_wow(name, w):
 
 
 def render_velocity(d):
-    """(body, count) for the Velocity section, or None when velocity.json is absent/unreadable
-    (a velocity failure must never fail the board; refresh.sh prints the SOURCE_ERROR)."""
+    """(body, count) for the Velocity section, or None when velocity.json is absent/unreadable, or older
+    than this refresh's data.json (a failed velocity step must never show a previous snapshot as current;
+    refresh.sh prints the SOURCE_ERROR). Both generated_at stamps are UTC %Y-%m-%dT%H:%M:%SZ."""
     try:
         v = json.load(open(VELOCITY))
         sa, sf = v["series"]["all"], v["series"]["ffb"]
         win = v["window"]
+        if str(v["generated_at"]) < str(d["generated_at"]):
+            return None
     except Exception:
         return None
     legend = ('<p class="vel-legend"><span><i class="vel-key" style="--k:var(--info)"></i>opened/day, 7-d mean</span>'

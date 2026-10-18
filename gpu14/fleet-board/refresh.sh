@@ -13,7 +13,7 @@ python3 "$B/collect.py" >"$B/cache/collect.out" 2>"$B/cache/collect.err" || { ec
 # velocity.json (open/close rates): a failure is a SOURCE_ERROR line, never a failed board; render skips the section.
 if ! (cd /home/matt/mission-control 2>/dev/null || cd "$B"; timeout 120 "$BD" list --all --json --limit 0) 2>"$B/cache/velocity.err" \
     | python3 "$B/velocity.py" - --out "$B/velocity.json" >"$B/cache/velocity.out" 2>>"$B/cache/velocity.err"; then
-  rm -f "$B/velocity.json"
+  find "$B" -maxdepth 1 -name velocity.json -delete 2>/dev/null  # render.py also refuses one older than data.json
   vel_err="$(tail -n 2 "$B/cache/velocity.err" | tr '\n' ' ' | cut -c1-200)"
 fi
 python3 "$B/render.py" >"$B/cache/render.out" 2>"$B/cache/render.err" || { echo "REFRESH_FAIL step=render rc=$? $(tail -n 3 "$B/cache/render.err" | tr '\n' ' ')"; exit 1; }
