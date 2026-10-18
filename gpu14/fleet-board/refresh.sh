@@ -4,10 +4,20 @@
 # usage: refresh.sh            (default pf-task budget, ~2.5 min)
 #        FB_PFTASK_BUDGET_S=400 refresh.sh   (one-off: warm cache/run-state.json for every lane)
 set -uo pipefail
-B=/home/matt/recovery/gpu14/fleet-board
+# FB_BOARD_DIR / FB_BD_BIN point the run at another board dir and bd binary (hermetic tests).
+B=${FB_BOARD_DIR:-/home/matt/recovery/gpu14/fleet-board}; export FB_BOARD_DIR=$B
+BD=${FB_BD_BIN:-bd}
+mkdir -p "$B/cache"
 t0=$(date +%s)
 python3 "$B/collect.py" >"$B/cache/collect.out" 2>"$B/cache/collect.err" || { echo "REFRESH_FAIL step=collect rc=$? $(tail -n 3 "$B/cache/collect.err" | tr '\n' ' ')"; exit 1; }
+# velocity.json (open/close rates): a failure is a SOURCE_ERROR line, never a failed board; render skips the section.
+if ! (cd /home/matt/mission-control 2>/dev/null || cd "$B"; timeout 120 "$BD" list --all --json --limit 0) 2>"$B/cache/velocity.err" \
+    | python3 "$B/velocity.py" - --out "$B/velocity.json" >"$B/cache/velocity.out" 2>>"$B/cache/velocity.err"; then
+  rm -f "$B/velocity.json"
+  vel_err="$(tail -n 2 "$B/cache/velocity.err" | tr '\n' ' ' | cut -c1-200)"
+fi
 python3 "$B/render.py" >"$B/cache/render.out" 2>"$B/cache/render.err" || { echo "REFRESH_FAIL step=render rc=$? $(tail -n 3 "$B/cache/render.err" | tr '\n' ' ')"; exit 1; }
+[ -n "${vel_err:-}" ] && echo "SOURCE_ERROR source='velocity' error=${vel_err@Q}"
 python3 - "$B" "$(( $(date +%s) - t0 ))" <<'PY'
 import json, sys
 b, secs = sys.argv[1], sys.argv[2]

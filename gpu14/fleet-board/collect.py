@@ -118,7 +118,7 @@ def wait_for(bid):
 
 
 MC = "/home/matt/mission-control"
-BOARD = "/home/matt/recovery/gpu14/fleet-board"
+BOARD = os.environ.get("FB_BOARD_DIR") or "/home/matt/recovery/gpu14/fleet-board"
 OUT = os.path.join(BOARD, "data.json")
 CACHE = os.path.join(BOARD, "cache", "run-state.json")
 OWNER_ASKS = "/home/matt/gpu14-owner-questions.md"

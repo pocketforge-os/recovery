@@ -532,8 +532,9 @@ tr[hidden] { display: none !important; }
 .vel-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
 .vel-key { display: inline-block; width: 16px; height: 3px; background: var(--k); margin-right: 6px; vertical-align: middle; }
 .vel-key.dash { background: repeating-linear-gradient(90deg, var(--k) 0 4px, transparent 4px 7px); }
-.vel { padding: 6px 8px; }
-.vel svg { display: block; width: 100%; min-width: 600px; height: auto; }
+/* rtl scroller: at phone width the chart opens scrolled to the newest days; the svg itself stays ltr */
+.vel { padding: 6px 8px; direction: rtl; }
+.vel svg { display: block; width: 100%; min-width: 600px; height: auto; direction: ltr; }
 .vel-wow { margin: 4px 0 6px; color: var(--ink-2); font-size: 13px; }
 
 @media (max-width: 600px) {

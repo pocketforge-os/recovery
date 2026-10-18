@@ -60,7 +60,7 @@ exp = {
         "2026-06-29": (0, 1, -1, 0.43, 0.57, 3),
         "2026-06-27": (1, 0, 1, 0.43, 0.57, 4),
         "2026-06-25": (1, 0, 1, 0.29, 0.43, 4),
-        "2026-06-20": (0, 0, 0, 0.0, 0.14, 6),   # epic e1 created here: must NOT count
+        "2026-06-20": (0, 0, 0, 0.0, 0.14, 5),   # epic e1 created here: must NOT count; f4 closed 06-18
     },
     "ffb": {
         "2026-06-30": (0, 0, 0, 0.29, 0.29, 1),
@@ -68,7 +68,7 @@ exp = {
         "2026-06-26": (0, 1, -1, 0.14, 0.43, 0),  # f1 closed
         "2026-06-25": (1, 0, 1, 0.14, 0.29, 1),   # f1 opened
         "2026-06-24": (0, 1, -1, 0.0, 0.43, 0),   # f2 closed
-        "2026-05-31": (0, 0, 0, 0.14, 0.0, 2),    # root created: NOT a descendant
+        "2026-05-31": (1, 0, 1, 0.14, 0.0, 2),    # f3 opened; root created same day: NOT a descendant
     },
 }
 tot = {"all": (9, 7), "ffb": (5, 4)}
@@ -96,22 +96,28 @@ for name in ("all", "ffb"):
 print("CHECK_OK")
 PYCHK
 
-# minimal data.json fixture for render.py / refresh.sh tail (keys render.py reads)
+# minimal data.json fixture for render.py / refresh.sh tail: the live collect.py shape, empty
 cat > "$T/data-fixture.json" <<'PYDATA'
 {
-  "generated_at": "2026-06-30T09:00:00Z", "generated_epoch": 1782982800,
-  "host": "test", "runtime_s": 0, "errors": [], "campaign_roots": [],
-  "needs": [], "prs": {}, "lanes": [], "dispatchable": [], "stale": [],
-  "owner_asks": [], "long_idle": {},
-  "device": {"running": null, "runner_alive": false, "pending": 0, "pending_count": 0,
-             "kit_running": false, "halted": false, "results": [], "queue": []},
-  "summary": {"needs": 0, "needs_by_kind": {}, "lanes_running": 0, "lanes_total": 0,
-              "lanes_needs": 0, "lanes_unchecked": 0, "lanes_waiting": 0,
-              "dispatchable": 0, "dispatchable_recent": 0, "newly_unblocked": 0,
+  "generated_at": "2026-06-30T09:00:00Z", "generated_epoch": 1782982800.0,
+  "host": "test", "runtime_s": 0.0, "errors": [], "campaign_roots": [],
+  "needs": [], "waits": [], "lanes": [], "released_runs": [], "prs": {}, "stale": [],
+  "beads_index": {},
+  "dispatchable": {"parallel": [], "parallel_total": 0, "parallel_shown": 0, "parallel_recent_total": 0,
+                   "parallel_rest_ids": [], "newly_unblocked": [], "chains": [], "chains_total": 0,
+                   "excluded_container_types": 0},
+  "device": {"runner_alive": false, "kit_running": false, "kit_proc": null, "halted": false,
+             "halt_line": null, "running": null, "next": [], "pending_count": 0, "held_count": 0,
+             "done_count": 0, "results": [], "events": [], "last_line": "", "log_mtime": ""},
+  "long_idle": {"count": 0, "ids": []},
+  "owner_asks": {"count": 0, "items": [], "error": null},
+  "summary": {"needs": 0, "needs_by_kind": {}, "lanes_total": 0, "lanes_running": 0, "lanes_waiting": 0,
+              "lanes_needs": 0, "lanes_unknown": 0, "lanes_released_hidden": 0, "lanes_unchecked": 0,
+              "dispatchable": 0, "dispatchable_recent": 0, "stale_individual": 0, "newly_unblocked": 0,
               "stale": 0, "owner_asks": 0,
               "device": {"running": null, "halted": false, "pending": 0, "runner_alive": false}},
-  "thresholds": {"STALE_BEAD_H": 24, "NEWLY_UNBLOCKED_H": 48, "RESULTS_SHOW": 5,
-                 "RESULTS_WINDOW_H": 72, "STALE_LOOKBACK_H": 168, "RECENT_DAYS": 14}
+  "thresholds": {"STALE_BEAD_H": 6, "LANE_LOG_WINDOW_H": 72, "NEWLY_UNBLOCKED_H": 72, "RESULTS_SHOW": 10,
+                 "RESULTS_WINDOW_H": 24, "STALE_LOOKBACK_H": 168, "RECENT_DAYS": 14}
 }
 PYDATA
 
@@ -175,7 +181,7 @@ cp "$T/v.json" "$S/velocity.json"
 o=$(FB_BOARD_DIR="$S" python3 "$S/render.py" 2>&1); rc=$?
 if [ $rc = 0 ] && has "$o" 'RENDER ok'; then
   H=$S/fleet-board.html
-  nsvg=$(grep -c '<svg' "$H")
+  nsvg=$(grep -o '<svg' "$H" | wc -l)
   grep -q 'id="velocity"' "$H" && [ "$nsvg" -ge 2 ] && ok render_velocity_section_two_svg || no render_velocity_section_two_svg "svgs=$nsvg $(grep -c 'id="velocity"' "$H" || true)"
   o2=$(python3 - "$H" <<'PYPOS' 2>&1
 import sys
@@ -212,7 +218,7 @@ chmod +x "$S3/bdstub"
 o=$(FB_BOARD_DIR="$S3" FB_BD_BIN="$S3/bdstub" FB_DATA_FIXTURE="$T/data-fixture.json" FB_ROWS_FIXTURE="$T/rows.json" bash "$S3/refresh.sh" 2>&1); rc=$?
 if [ $rc = 0 ]; then
   [ -f "$S3/data.json" ] && [ -f "$S3/velocity.json" ] && ok refresh_writes_velocity_json || no refresh_writes_velocity_json "data=$([ -f "$S3/data.json" ] && echo y) velocity=$([ -f "$S3/velocity.json" ] && echo y)"
-  grep -q 'id="velocity"' "$S3/fleet-board.html" 2>/dev/null && [ "$(grep -c '<svg' "$S3/fleet-board.html")" -ge 2 ] && ok refresh_board_has_velocity || no refresh_board_has_velocity "$(tail -3 <<<"$o")"
+  grep -q 'id="velocity"' "$S3/fleet-board.html" 2>/dev/null && [ "$(grep -o '<svg' "$S3/fleet-board.html" | wc -l)" -ge 2 ] && ok refresh_board_has_velocity || no refresh_board_has_velocity "$(tail -3 <<<"$o")"
 else
   no refresh_writes_velocity_json "rc=$rc $o"
 fi
