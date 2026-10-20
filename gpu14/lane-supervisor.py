@@ -337,6 +337,17 @@ def _git_default_ref(repo):
     return None
 
 
+def _release_preserved_paths(run):
+    """Paths a released run's receipt KEPT (bundle preservation or worktree_retention), else []."""
+    retained = run.get("release_worktree") if isinstance(run.get("release_worktree"), dict) else {}
+    disposition = run.get("release_disposition") if isinstance(run.get("release_disposition"), dict) else {}
+    if retained.get("retention") != "kept" and not isinstance(disposition.get("preservation"), dict):
+        return []
+    paths = [str(run.get("request", {}).get("worktree") or "")]
+    paths += [str(item.get("path") or "") for item in retained.get("kept_paths") or [] if isinstance(item, dict)]
+    return [path for path in paths if path]
+
+
 def verified_wt_rm_allowed(cmd, runs_loader=None, wt_root="/home/matt/wt"):
     beads = _wt_rm_beads(cmd)
     if not beads:
@@ -352,6 +363,12 @@ def verified_wt_rm_allowed(cmd, runs_loader=None, wt_root="/home/matt/wt"):
     runs = runs_loader()
     for bead in beads:
         base = os.path.join(wt_root, bead) + os.sep
+        # 2026-10-20 (tsp-mc9m.41.1030.42): a release that kept its tree (bundle-only HEAD, or an explicit
+        # keep) must never be swept, even once HEAD lands; only the owner/coordinator removes it by hand.
+        kept = [r.get("run_id") for r in runs
+                if any(p == base[:-1] or p.startswith(base) for p in _release_preserved_paths(r))]
+        if kept:
+            return False, f"wtrm:release_preserved:{bead}:{kept[0]}"
         owners = [r for r in runs if str(r.get("request", {}).get("worktree") or "").startswith(base)]
         if not owners:
             return False, f"wtrm:no_run_owns:{bead}"

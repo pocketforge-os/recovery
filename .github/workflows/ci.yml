@@ -17,6 +17,10 @@ jobs:
         run: |
           scripts/check-vendor.sh
           scripts/test-check-vendor.sh
+      - name: gpu14 release keep/preservation hermetic controls
+        run: |
+          python3 -B gpu14/lane_wtrm_test.py
+          bash gpu14/tests/release-run-test.sh
       - name: Battery probe hermetic controls
         run: env PATH=/usr/bin:/bin python3 -B -I tsp-mc9m.60.29.6/test_battery_probe.py
       - name: Test

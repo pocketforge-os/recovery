@@ -17,16 +17,39 @@
 # 40-hex commit | bead> SUPERSEDE_REASON=<text> skips ONLY this script's landed check and passes pf-task's
 # audited `supersede` to run.release, which itself refuses unless the tree is clean and HEAD is exactly on
 # a pushed origin branch (push the branch with -u first). Replaces the weaker ALLOW_HEAD bypass.
+# Kept worktrees (2026-10-20, tsp-mc9m.41.1030.42): KEEP_WORKTREE=1 [KEEP_REASON=<text>] releases but keeps the set:
+# pf-task records release_worktree retention=kept for every repo path, and nothing is removed.
+# PRESERVATION=bundle:<path>#<sha256> (with SUPERSEDED_BY) releases a HEAD that is on NO origin branch, preserved
+# by a git bundle under ~/recovery/release-preserved; the bundle is pre-checked here (regular file, no symlink,
+# sha256) and fully verified by pf-task. It implies KEEP_WORKTREE=1. After every release the run.status receipt is
+# read back: kept paths / bundle sha256 that differ from the request (or an unrequested keep) exit 5
+# RELEASE_RECEIPT_MISMATCH and remove nothing.
 set -u
 RUN=$1; BEAD=$2; DEF=${3:-}
-ROOT=/home/matt/wt/$BEAD
+WT_BASE=${PF_RELEASE_WT_BASE:-/home/matt/wt}
+PRESERVED_BASE=${PF_RELEASE_PRESERVED_BASE:-/home/matt/recovery/release-preserved}
+ROOT=$WT_BASE/$BEAD
+KEEP=${KEEP_WORKTREE:-0}; PRES_PATH=""; PRES_SHA=""
+case "$KEEP" in 0|1) ;; *) echo "RELEASE_REFUSED reason=keep_worktree_not_0_or_1"; exit 2 ;; esac
+if [ -n "${PRESERVATION:-}" ]; then
+  case "$PRESERVATION" in bundle:/*'#'*) ;; *) echo "RELEASE_REFUSED reason=preservation_malformed hint=bundle:<abs path>#<sha256>"; exit 2 ;; esac
+  spec=${PRESERVATION#bundle:}; PRES_PATH=${spec%'#'*}; PRES_SHA=${spec##*'#'}
+  [[ "$PRES_SHA" =~ ^[0-9a-f]{64}$ ]] || { echo "RELEASE_REFUSED reason=preservation_sha256_malformed"; exit 2; }
+  [ -n "${SUPERSEDED_BY:-}" ] || { echo "RELEASE_REFUSED reason=preservation_requires_superseded_by"; exit 2; }
+  { [ -f "$PRES_PATH" ] && [ ! -L "$PRES_PATH" ]; } || { echo "RELEASE_REFUSED reason=preservation_not_regular_file path=$PRES_PATH"; exit 2; }
+  pres_real=$(realpath -e "$PRES_PATH" 2>/dev/null); pres_base=$(realpath -e "$PRESERVED_BASE" 2>/dev/null)
+  case "$pres_real" in "$pres_base"/?*) ;; *) echo "RELEASE_REFUSED reason=preservation_outside_root path=$PRES_PATH root=$PRESERVED_BASE"; exit 2 ;; esac
+  [ "$(sha256sum < "$PRES_PATH" | cut -d' ' -f1)" = "$PRES_SHA" ] || { echo "RELEASE_REFUSED reason=preservation_sha256_mismatch path=$PRES_PATH"; exit 2; }
+  KEEP=1
+fi
 # 2026-10-06: coordinator lanes live in `bd worktree` trees named by lane (mc-compositor-lane-g1),
 # not by bead, so a lane's release refused `no_worktree_set` and sat unreleased for ~20 h.
 # WORKTREE_ROOT=<path under /home/matt/wt/> names that tree explicitly; every check below still applies.
 if [ -n "${WORKTREE_ROOT:-}" ]; then
-  case "$WORKTREE_ROOT" in /home/matt/wt/?*) ROOT=${WORKTREE_ROOT%/} ;; *) echo "RELEASE_REFUSED reason=worktree_root_outside_wt root=$WORKTREE_ROOT"; exit 2 ;; esac
+  case "$WORKTREE_ROOT" in "$WT_BASE"/?*) ROOT=${WORKTREE_ROOT%/} ;; *) echo "RELEASE_REFUSED reason=worktree_root_outside_wt root=$WORKTREE_ROOT"; exit 2 ;; esac
 fi
-R=/home/matt/recovery/gpu14
+R=${GPU14_ROOT:-/home/matt/recovery/gpu14}
+PF_TOOL=${PF_AUTOMATION_TOOL:-pf-automation-tool}
 resolved_home=$("$R/pf-task-run-home" resolve "$RUN" --format shell) || { echo "RELEASE_REFUSED reason=run_home_unresolved run=$RUN"; exit 2; }
 eval "$resolved_home"
 PFT=("$PFT" --home "$H" --role coordinator)
@@ -42,7 +65,7 @@ if [ -z "${WORKTREE_ROOT:-}" ]; then
 d=json.load(sys.stdin); r=d.get("result",d); r=r.get("run",r); w=r.get("worktree")
 print((w.get("text") if isinstance(w,dict) else w) or "")' 2>/dev/null)
   case "$rwt" in
-    /home/matt/wt/?*/?*) rset=/home/matt/wt/$(printf '%s' "${rwt#/home/matt/wt/}" | cut -d/ -f1)
+    "$WT_BASE"/?*/?*) rset=$WT_BASE/$(printf '%s' "${rwt#"$WT_BASE"/}" | cut -d/ -f1)
       if [ "$rset" != "$ROOT" ] && [ -d "$rset" ]; then echo "RELEASE_NOTE worktree set from run.status: $rset (default $ROOT)"; ROOT=$rset; fi ;;
   esac
 fi
@@ -58,7 +81,7 @@ for r in "${REPOS[@]}"; do
   # NON-empty non-git dir is now MOVED (never deleted) to release-preserved/<set>/ and reported; nothing is lost.
   if [ ! -e "$r/.git" ]; then
     rmdir "$r" 2>/dev/null && { echo "removed empty non-git dir $r"; continue; }
-    pres=/home/matt/recovery/release-preserved/$(basename "$ROOT")/$(basename "$r")-$(date -u +%Y%m%dT%H%M%SZ)
+    pres=$PRESERVED_BASE/$(basename "$ROOT")/$(basename "$r")-$(date -u +%Y%m%dT%H%M%SZ)
     mkdir -p "$(dirname "$pres")" && mv "$r" "$pres" \
       && { echo "preserved_non_git_dir path=$r -> $pres files=$(find "$pres" -type f | wc -l) bytes=$(du -sb "$pres" | cut -f1)"; continue; }
     echo "RELEASE_REFUSED reason=not_a_git_worktree path=$r hint=move_failed; move it out by hand"; exit 3
@@ -97,7 +120,7 @@ for r in "${REPOS[@]}"; do
   # (pocketforge -> pocketforge-linear), work merged into the old branch is landed in the ARCHIVE, not in the new default.
   # archive-branches.tsv (repo<TAB>branch...) names those archives; a HEAD contained in one counts as landed there.
   if ! git -C "$r" merge-base --is-ancestor "$h" "origin/$d" 2>/dev/null; then
-    for ab in $(awk -F'\t' -v n="$n" '$1==n{for(i=2;i<=NF;i++) print $i}' "/home/matt/recovery/gpu14/archive-branches.tsv" 2>/dev/null); do
+    for ab in $(awk -F'\t' -v n="$n" '$1==n{for(i=2;i<=NF;i++) print $i}' "$R/archive-branches.tsv" 2>/dev/null); do
       git -C "$r" fetch -q origin "$ab" 2>/dev/null || continue
       if git -C "$r" merge-base --is-ancestor "$h" "origin/$ab"; then echo "landed_in_archive repo=$n branch=$ab default=$d"; d=$ab; break; fi
     done
@@ -173,13 +196,21 @@ done
 for rc in $pending; do
   "${PFT[@]}" run.result "{\"run_id\":\"$RUN\",\"ack_receipt\":\"$rc\"}" >/dev/null 2>&1 && echo "acked $rc"
 done
-if [ -n "${SUPERSEDED_BY:-}" ]; then
-  req=$(RUN="$RUN" python3 -c 'import json,os; print(json.dumps({"run_id": os.environ["RUN"], "supersede": {"superseded_by": os.environ["SUPERSEDED_BY"], "reason": os.environ["SUPERSEDE_REASON"]}}))')
-else
-  req="{\"run_id\":\"$RUN\"}"
-fi
+KEPT_PATHS=()
+for r in "${REPOS[@]}"; do [ -e "${r%/}/.git" ] && KEPT_PATHS+=("$(realpath -e "${r%/}")"); done
+req=$(RUN="$RUN" KEEP="$KEEP" PRES_PATH="$PRES_PATH" PRES_SHA="$PRES_SHA" python3 -c 'import json,os,sys
+e=os.environ; req={"run_id": e["RUN"]}
+if e.get("SUPERSEDED_BY"):
+    req["supersede"]={"superseded_by": e["SUPERSEDED_BY"], "reason": e["SUPERSEDE_REASON"]}
+    if e["PRES_SHA"]:
+        req["supersede"]["preservation"]={"kind": "bundle", "path": e["PRES_PATH"], "sha256": e["PRES_SHA"]}
+if e["KEEP"] == "1":
+    reason=e.get("KEEP_REASON") or ("bundle preservation: HEAD on no origin branch" if e["PRES_SHA"] else "release-run.sh KEEP_WORKTREE=1")
+    req["worktree_retention"]={"reason": reason, "paths": sys.argv[1:]}
+print(json.dumps(req))' "${KEPT_PATHS[@]}")
 out=$("${PFT[@]}" run.release "$req" 2>&1)
-st=$("${PFT[@]}" run.status "{\"run_id\":\"$RUN\"}" 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("state"))')
+sj=$("${PFT[@]}" run.status "{\"run_id\":\"$RUN\"}" 2>/dev/null)
+st=$(printf '%s' "$sj" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("state"))' 2>/dev/null)
 if [ "$st" != released ]; then
   echo "RELEASE_REFUSED reason=run_state_$st detail=$(tail -c 400 <<<"$out" | tr '\n' ' ')"
   if [ "${tot:-0}" = 0 ] && grep -q 'unreconciled_deliveries_or_receipts' <<<"$out"; then
@@ -189,6 +220,30 @@ if [ "$st" != released ]; then
   exit 4
 fi
 echo "released run=$RUN"
+# Read the durable receipt back; never trust the request. Any mismatch keeps every tree.
+mismatch=$(printf '%s' "$sj" | KEEP="$KEEP" PRES_PATH="$PRES_PATH" PRES_SHA="$PRES_SHA" python3 -c 'import json,os,sys
+t=lambda v: v.get("text") if isinstance(v, dict) else v
+e=os.environ; d=json.load(sys.stdin); rw=d.get("release_worktree") or {}
+kept={os.path.realpath(t(k.get("path")) or "") for k in rw.get("kept_paths") or [] if isinstance(k, dict)}
+if e["KEEP"] == "1":
+    if rw.get("retention") != "kept": print("retention=%s" % rw.get("retention")); sys.exit()
+    missing=[p for p in sys.argv[1:] if os.path.realpath(p) not in kept]
+    if missing: print("kept_path_missing=" + missing[0]); sys.exit()
+elif rw.get("retention") == "kept":
+    print("unrequested_keep"); sys.exit()
+if e["PRES_SHA"]:
+    p=(d.get("release_disposition") or {}).get("preservation") or {}
+    if t(p.get("sha256")) != e["PRES_SHA"] or t(p.get("path")) != e["PRES_PATH"]:
+        print("bundle_receipt=%s" % (t(p.get("sha256")) or "absent")); sys.exit()' "${KEPT_PATHS[@]}" 2>&1)
+if [ -n "$mismatch" ]; then
+  echo "RELEASE_RECEIPT_MISMATCH run=$RUN $mismatch"
+  echo "worktrees KEPT at $ROOT (run IS released; nothing removed)"
+  exit 5
+fi
+if [ "$KEEP" = 1 ]; then
+  echo "worktrees KEPT at $ROOT (receipt retention=kept paths=${#KEPT_PATHS[@]}${PRES_SHA:+ bundle_sha256=$PRES_SHA})"
+  exit 0
+fi
 if [ "$NOWT" = 1 ]; then
   echo "no worktree to remove"
 elif [ "$SINGLE" = 1 ]; then
@@ -199,10 +254,10 @@ elif [ "$SINGLE" = 1 ]; then
     git -C "$ROOT" worktree remove "$ROOT" 2>&1 | tail -3
   fi
   [ -e "$ROOT" ] && echo "WORKTREE_REMOVE_FAILED path=$ROOT (run IS released)" || echo "removed worktree $ROOT"
-elif [ "$ROOT" = "/home/matt/wt/$BEAD" ]; then
+elif [ "$ROOT" = "$WT_BASE/$BEAD" ]; then
   # 2026-10-10: the shared ~/.local/bin/pf-wt is 1010 commits stale (tsp-hqm1p.52) and cannot remove a
   # set holding a pf-wt evidence target (tsp-f3fm.234); the pinned origin/main pf-wt can.
-  pf-automation-tool pf-wt.sh rm "$BEAD" 2>&1 | tail -3
+  "$PF_TOOL" pf-wt.sh rm "$BEAD" 2>&1 | tail -3
 else
   # 2026-10-06: with WORKTREE_ROOT=<...-r2> the checks verified ROOT, but `pf-wt rm $BEAD` removed
   # /home/matt/wt/$BEAD, a DIFFERENT (preserved) run's tree. Remove only the verified ROOT, per repo,
@@ -212,7 +267,7 @@ else
   # that name removes exactly the verified ROOT (with pf-wt's own dirty-tree refusal).
   set_name=$(basename "$ROOT")
   if grep -qx "pf-wt $set_name" "$(git -C "$(ls -d "$ROOT"/*/ | head -n 1)" rev-parse --git-dir 2>/dev/null)/locked" 2>/dev/null; then
-    pf-automation-tool pf-wt.sh rm "$set_name" 2>&1 | tail -3
+    "$PF_TOOL" pf-wt.sh rm "$set_name" 2>&1 | tail -3
   fi
   for d in "$ROOT"/*/; do
     d=${d%/}; [ -e "$d/.git" ] || continue
