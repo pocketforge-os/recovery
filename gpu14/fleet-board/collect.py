@@ -16,8 +16,10 @@ Sources (all read-only):
                lookups, sequential, each under PFTASK_TIMEOUT_S, total budget
                PFTASK_BUDGET_S). Never the pf-task journal/DB.
   C. PRs       `gh pr view` for PRs named in lane status lines (cached per run).
-  D. device    <G>/queue.tsv, queue.done, device-queue.txt, `ps` for the queue
-               runner and a running direct-boot.sh kit.
+  D. device    the live window queue (fleet-board/window-queue.tsv, .done.tsv,
+               .failed.tsv, .active, .pause, window-done/, /proc/locks for its run
+               lock), the legacy <G>/queue.tsv, queue.done, device-queue.txt, `ps`
+               for the queue runner and a running direct-boot.sh kit.
   E. owner     /home/matt/gpu14-owner-questions.md "## Needs you" section.
 
 data.json schema (top level):
@@ -26,7 +28,8 @@ data.json schema (top level):
   errors            [{source, error}] every source that could not be read
   summary           {needs, lanes_total, lanes_running, lanes_waiting, lanes_needs,
                      lanes_unknown, dispatchable, newly_unblocked, stale, owner_asks,
-                     device:{running, pending, halted, runner_alive}}
+                     device:{running, pending, halted, runner_alive, kit_running, wq_depth,
+                     wq_held, wq_active, wq_active_phase, wq_paused, wq_running}}
   needs             [{rank, kind, id, lane, bead, run, pr, reason, since, age_s, next}]
                     kind in handback|merge_ready|boot_ready|blocked|stale|undriven|
                     device|dispatchable ; sorted by rank
@@ -50,7 +53,13 @@ data.json schema (top level):
                      running:{name, started_at, elapsed_s, receipt}|null,
                      next:[{name, type, path, sha, args, position}], pending_count,
                      held_count, done_count, results:[{ts, name, verdict, cls,
-                     detail}], events:[{ts, kind, text}], last_line, log_mtime}
+                     detail}], events:[{ts, kind, text}], last_line, log_mtime,
+                     window_queue:{running, running_via, paused, pause_line, pause_at, depth,
+                     held_count, withdrawn_count, active:{gen, lane, owner, label, phase,
+                     since, pkg}|null, pending:[row+position], held:[row+hold, held_at,
+                     reason], done_count, failed_count, recent:[{ts, gen, lane, label,
+                     outcome, src}]}}
+                    (lanes[].window_queue = {gen, state, text, position} for a BOOT_READY lane)
   stale             [{id, title, status, assignee, tier, parent, updated_at,
                      last_comment_at, comment_count, age_s}]
   long_idle         {count, ids:[...]}   in_progress in scope, untouched > STALE_LOOKBACK_H
@@ -281,6 +290,8 @@ KV_RE = re.compile(r"(\w+)=(\S+)")
 RUN_RE = re.compile(r"driver start run=(pft-[0-9a-f]{24})")
 PR_RE = re.compile(r"^([\w.-]+/[\w.-]+)#(\d+)$")
 HEX64_RE = re.compile(r"[0-9a-f]{64}")
+# window-queue.sh field(): the FIRST whitespace-delimited gen= value, trailing `*,; stripped, must be 32 hex.
+STATUS_GEN_RE = re.compile(r"(?:^|\s)gen=(\S+)")
 BEAD_RE = re.compile(r"(tsp-[a-z0-9]+(?:\.[0-9]+)*)")
 
 
@@ -310,7 +321,11 @@ def parse_lane_log(path):
         sm = STATUS_RE.match(rest)
         if sm:
             n, body = int(sm.group(1)), sm.group(2).strip()
-            st = {"n": n, "ts": ts, "raw": body[:400], "state": "NONE", "reason": None, "kv": {}}
+            st = {"n": n, "ts": ts, "raw": body[:400], "state": "NONE", "reason": None, "kv": {}, "gen": None}
+            # 2026-10-19: the window-queue generation, read from the whole line (raw is clipped at 400 chars)
+            gm = STATUS_GEN_RE.search(body)
+            gv = re.sub(r"[`*,;]+$", "", gm.group(1)) if gm else ""
+            st["gen"] = gv if re.fullmatch(r"[0-9a-f]{32}", gv) else None
             tm = TOKEN_RE.match(body)
             if tm:
                 lane["token"] = tm.group(1)
@@ -462,6 +477,14 @@ def collect_lanes(drivers, adm, cache):
         ln["source"] = "log"
         ln["run"] = ln["runs"][-1] if ln["runs"] else None
         lanes.append(ln)
+    # 2026-10-19: a re-driven run can leave an older drive log under another lane name (payloadfix-r3 ->
+    # payloadfix, same pft-b51a3e09). The run-matched driver made the stale log look alive and resurfaced its
+    # old HANDBACK as Needs gpu-14. Only the most recently active log for a run counts.
+    newest = {}
+    for ln in lanes:
+        if ln["run"] and (ln["run"] not in newest or (ln["last_event_at"] or "") > (newest[ln["run"]]["last_event_at"] or "")):
+            newest[ln["run"]] = ln
+    lanes = [ln for ln in lanes if not ln["run"] or newest[ln["run"]] is ln]
     # admitted runs (recent admission file) with no lane log at all: nothing wakes gpu-14 for them
     logged_runs = {l["run"] for l in lanes if l["run"]}
     for rid, a in adm.items():
@@ -832,7 +855,233 @@ def collect_device():
     res = [e for e in events if e["kind"] in ("result", "halt", "skip")]
     recent = [e for e in res if (parse_ts(e["ts"]) or NOW) >= cutoff]
     dev["results"] = (recent if len(recent) >= RESULTS_SHOW else res)[-RESULTS_SHOW:][::-1]
+    dev["window_queue"], dev["wq_by_gen"] = collect_window_queue()
     return dev
+
+
+# ------------------------------------------------------------- window queue --
+# 2026-10-19: since 10-16 (D4a) the live bench queue is window-queue.sh over fleet-board/window-queue.tsv, but the board
+# read only the retired kits queue (queue.tsv): the bench tile said "0 queued" with rows queued, and lanes whose kit was
+# queued, HELD or already consumed were flagged boot_ready. Formats are window-queue.sh's own (Q, ACTIVE, DONE, FAILED,
+# PAUSE, MARK, RL there):
+#   window-queue.tsv        ts lane owner TOKEN pkg gen steps label note; first non-comment row is next. '#' rows are
+#                           comments; gpu-14 holds a row as `# HELD <why>` (or `# PARKED <why>`) + the original columns,
+#                           and withdraws one as `#withdrawn-<who>-<ts> <why>` + the original columns.
+#   window-queue.done.tsv   ts gen owner lane label outcome pkg (finish)
+#   window-queue.failed.tsv ts kind reason + the popped 9-column row, so gen is column 9 (fail_row)
+#   window-queue.active     key=value lines: gen owner lane token pkg label phase since
+#   window-queue.pause      present = paused (the STOP line)
+#   window-done/<gen>       success|failure<TAB>ts<TAB>source (the --done marker)
+#   .window-queue.run.lock  flock held by the running loop for its whole life (running())
+WQ_BOARD = os.environ.get("WQ_BOARD") or BOARD
+KIT_WINDOWS = os.environ.get("PF_KIT_WINDOWS_DIR") or os.path.expanduser("~/.local/state/pocketforge/kit-windows")
+WQ_SHOW = 15                    # pending / held window-queue rows listed
+WQ_RECENT_SHOW = 8              # done / failed window-queue rows listed
+WQ_GEN_RE = re.compile(r"^[0-9a-f]{32}$")
+WQ_HOLD_RE = re.compile(r"^#\s*(HELD|PARKED)\b[\s:]*(.*)$")
+WQ_WITHDRAWN_RE = re.compile(r"^#\s*withdrawn-(\S+)\s*(.*)$", re.I)
+WQ_TAIL_TS_RE = re.compile(r"[\s:#]*\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\s*$")   # the row's own ts, kept after the prefix
+WQ_LEAD_TS_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?Z)\s*")
+
+
+def wq_running(lock_path):
+    """window-queue.sh running(): the loop holds an flock on .window-queue.run.lock, so `flock -n` fails while it runs.
+    Answer the same question by reading /proc/locks for a granted FLOCK on that inode: a pure read that never takes the
+    lock, so a refresh can never make a starting loop exit already_running. Without /proc/locks, fall back to the
+    same non-blocking probe --status uses. Returns (running, method)."""
+    try:
+        s = os.stat(lock_path)
+    except FileNotFoundError:
+        return False, "no_lock_file"
+    want = (os.major(s.st_dev), os.minor(s.st_dev), s.st_ino)
+    try:
+        with open("/proc/locks") as f:
+            for ln in f:
+                p = ln.split()
+                if len(p) < 6 or p[1] != "FLOCK":   # "N: -> FLOCK ..." is a blocked waiter, not a holder
+                    continue
+                mm = p[5].split(":")
+                try:
+                    if (int(mm[0], 16), int(mm[1], 16), int(mm[2])) == want:
+                        return True, "proc_locks"
+                except (ValueError, IndexError):
+                    continue
+        return False, "proc_locks"
+    except OSError:
+        pass
+    import fcntl
+    fd = os.open(lock_path, os.O_WRONLY | os.O_APPEND)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True, "flock_probe"
+    finally:
+        os.close(fd)   # closing the only fd releases a probe lock we did take
+    return False, "flock_probe"
+
+
+def collect_window_queue():
+    """Return (window_queue summary for data.json, {gen: disposition}). A disposition is
+    {state: active|pending|held|consumed, text, ...}; precedence active > pending > held > done/failed/marker > withdrawn."""
+    fb = WQ_BOARD
+    wq = {"path": os.path.join(fb, "window-queue.tsv"), "running": None, "running_via": None, "paused": False,
+          "pause_line": None, "pause_at": None, "depth": 0, "held_count": 0, "withdrawn_count": 0, "active": None,
+          "pending": [], "held": [], "done_count": 0, "failed_count": 0, "recent": []}
+    by_gen = {}
+    try:
+        wq["running"], wq["running_via"] = wq_running(os.path.join(fb, ".window-queue.run.lock"))
+    except Exception as ex:
+        err("window-queue run lock", ex)
+    pp = os.path.join(fb, "window-queue.pause")
+    if os.path.isfile(pp):
+        wq["paused"] = True
+        try:
+            wq["pause_at"] = iso(os.path.getmtime(pp))
+            with open(pp, errors="replace") as f:
+                wq["pause_line"] = f.read(200).strip()
+        except OSError as ex:
+            err("window-queue.pause", ex)
+    try:
+        kv = {}
+        with open(os.path.join(fb, "window-queue.active"), errors="replace") as f:
+            for l in f:
+                k, sep, v = l.rstrip("\n").partition("=")
+                if sep and k not in kv:
+                    kv[k] = v
+        if kv.get("gen"):   # --status: sed -n 's/^gen=//p' | head -1
+            wq["active"] = {k: kv.get(k) for k in ("gen", "lane", "owner", "label", "phase", "since", "pkg")}
+    except FileNotFoundError:
+        pass
+    except Exception as ex:
+        err("window-queue.active", ex)
+    # done / failed / markers: every outcome a generation has had, oldest first
+    outcomes = collections.defaultdict(list)
+    recent = []
+    for fn, src in (("window-queue.done.tsv", "done"), ("window-queue.failed.tsv", "failed")):
+        try:
+            with open(os.path.join(fb, fn), errors="replace") as f:
+                for raw in f:
+                    line = raw.rstrip("\n")
+                    if not line:
+                        continue
+                    wq[src + "_count"] += 1          # --status counts failed rows with grep -c .
+                    c = line.split("\t")
+                    if src == "done" and len(c) >= 6:
+                        g, oc, lane, label = c[1], c[5], c[3], c[4]
+                    elif src == "failed" and len(c) >= 9:
+                        g, oc = c[8], f"failed {c[1]}" + (f" {c[2]}" if c[2] else "")
+                        lane, label = c[4], (c[10] if len(c) > 10 else "")
+                    else:
+                        continue
+                    oc = re.sub(r"\s*gen=[0-9a-f]{32}", "", oc)
+                    outcomes[g].append((c[0], oc[:160]))
+                    recent.append({"ts": c[0], "gen": g, "lane": lane, "label": label, "outcome": oc[:200], "src": src})
+        except FileNotFoundError:
+            pass
+        except Exception as ex:
+            err(fn, ex)
+    wq["recent"] = sorted(recent, key=lambda r: r["ts"], reverse=True)[:WQ_RECENT_SHOW]
+    for g, ocs in outcomes.items():
+        if WQ_GEN_RE.match(g):
+            by_gen[g] = {"state": "consumed", "outcome": "; ".join(o for _t, o in sorted(ocs)[-3:]), "src": "window-queue"}
+    try:
+        md = os.path.join(fb, "window-done")
+        for g in os.listdir(md):
+            if WQ_GEN_RE.match(g) and g not in by_gen:
+                with open(os.path.join(md, g), errors="replace") as f:
+                    m = f.readline().split("\t")
+                by_gen[g] = {"state": "consumed", "outcome": f"window-done marker {m[0].strip() or '?'}"
+                             + (f" ({m[2].strip()})" if len(m) > 2 and m[2].strip() else ""), "src": "window-done"}
+    except FileNotFoundError:
+        pass
+    except Exception as ex:
+        err("window-done markers", ex)
+    # the queue file: pending rows (position = order among non-comment rows, as head_row/--status count them)
+    held_gens = {}
+    try:
+        with open(wq["path"], errors="replace") as f:
+            for raw in f:
+                line = raw.rstrip("\n")
+                if not line.strip():
+                    continue
+                c = line.split("\t")
+                row = {"ts": c[0], "lane": c[1] if len(c) > 1 else "", "run": c[2] if len(c) > 2 else "",
+                       "token": c[3] if len(c) > 3 else "", "pkg": c[4] if len(c) > 4 else "",
+                       "gen": c[5] if len(c) > 5 else "", "steps": c[6] if len(c) > 6 else "",
+                       "label": c[7] if len(c) > 7 else "", "note": (c[8] if len(c) > 8 else "")[:200]}
+                if line.lstrip().startswith("#"):
+                    if not WQ_GEN_RE.match(row["gen"]):
+                        continue                     # header or a free comment
+                    head = c[0].strip()
+                    mh, mw = WQ_HOLD_RE.match(head), WQ_WITHDRAWN_RE.match(head)
+                    if mw:
+                        why = WQ_TAIL_TS_RE.sub("", mw.group(2)).strip() or "withdrawn"
+                        wq["withdrawn_count"] += 1
+                        by_gen.setdefault(row["gen"], {"state": "consumed", "outcome": f"withdrawn ({mw.group(1)}): {why[:120]}",
+                                                       "src": "window-queue"})
+                        continue
+                    why = WQ_TAIL_TS_RE.sub("", mh.group(2) if mh else head.lstrip("#")).strip()
+                    lm = WQ_LEAD_TS_RE.match(why)
+                    row.update(ts=None, hold=(mh.group(1) if mh else "commented"), held_at=lm.group(1) if lm else None,
+                               reason=((why[lm.end():] if lm else why).strip() or (mh.group(1) if mh else "commented"))[:300])
+                    tm = WQ_TAIL_TS_RE.search(head)
+                    row["ts"] = tm.group(0).strip(" :#") if tm else None
+                    wq["held_count"] += 1
+                    if len(wq["held"]) < WQ_SHOW:
+                        wq["held"].append(row)
+                    held_gens[row["gen"]] = row
+                    continue
+                wq["depth"] += 1
+                row["position"] = wq["depth"]
+                if len(wq["pending"]) < WQ_SHOW:
+                    wq["pending"].append(row)
+                if WQ_GEN_RE.match(row["gen"]):
+                    by_gen[row["gen"]] = {"state": "pending", "position": row["position"], "label": row["label"],
+                                          "src": "window-queue"}
+    except FileNotFoundError:
+        pass
+    except Exception as ex:
+        err("window-queue.tsv", ex)
+    for g, row in held_gens.items():
+        if (by_gen.get(g) or {}).get("state") != "pending":
+            by_gen[g] = {"state": "held", "hold": row["hold"], "reason": row["reason"], "held_at": row["held_at"],
+                         "src": "window-queue"}
+    a = wq["active"]
+    if a and WQ_GEN_RE.match(a["gen"] or ""):
+        by_gen[a["gen"]] = {"state": "active", "phase": a.get("phase"), "since": a.get("since"), "src": "window-queue"}
+    # display text, once the depth and the loop state are known
+    loop = " (queue PAUSED)" if wq["paused"] else (" (queue loop NOT running)" if wq["running"] is False else "")
+    for g, d in by_gen.items():
+        if d["state"] == "pending":
+            d["text"] = f"queued #{d['position']} of {wq['depth']} in the window queue (gen {g[:8]}){loop}"
+        elif d["state"] == "held":
+            d["text"] = f"{'held' if d['hold'] == 'HELD' else d['hold'].lower()}: {d['reason'][:180]}"
+        elif d["state"] == "active":
+            d["text"] = f"window-queue active item: gen {g[:8]} phase={d.get('phase') or '?'} since {d.get('since') or '?'}"
+        else:
+            d["text"] = f"consumed: {d['outcome'][:200]}"
+    return wq, by_gen
+
+
+def kit_window_disposition(gen):
+    """A gen the window queue never saw but pf-kit-window-runner did: consumed (window-queue.sh --add refuses it as
+    generation_consumed). None when the runner has no trace of it."""
+    try:
+        rj = os.path.join(KIT_WINDOWS, gen, "runner.json")
+        if os.path.exists(rj):
+            with open(rj) as f:
+                state = str(json.load(f).get("State") or "unknown")
+        elif os.path.exists(os.path.join(KIT_WINDOWS, f"boot-open-{gen}.failed.json")):
+            state = "boot-open failed"
+        elif os.path.exists(os.path.join(KIT_WINDOWS, f"boot-open-{gen}.json")) or os.path.isdir(os.path.join(KIT_WINDOWS, gen)):
+            state = "boot-open started"
+        else:
+            return None
+    except Exception as ex:
+        err(f"kit-windows {gen[:8]}", ex)
+        return None
+    return {"state": "consumed", "outcome": f"kit window {state} (outside the window queue)", "src": "kit-windows",
+            "text": f"consumed: kit window {state} (outside the window queue)"}
 
 
 # --------------------------------------------------------------- owner asks --
@@ -846,8 +1095,12 @@ def collect_owner_asks():
         return out
     m = re.search(r"^## Needs you\s*$(.*?)(?=^## |\Z)", txt, re.S | re.M)
     sec = m.group(1) if m else ""
-    for im in re.finditer(r"^(\d+)\.\s+\*\*(.+?)\*\*", sec, re.M):
-        out["items"].append({"num": int(im.group(1)), "title": im.group(2).strip()[:200]})
+    # 2026-10-19 (gpu-14): the file lists asks as "- **Q57 (...): title**" bullets as well as
+    # "1. **title**" numbered lines; matching only the numbered form showed 0 live asks while Q53-Q57 were open.
+    for n, im in enumerate(re.finditer(r"^(?:(\d+)\.|-)\s+\*\*(.+?)\*\*", sec, re.M), 1):
+        q = re.match(r"Q(\d+)\b", im.group(2))
+        num = int(im.group(1) or (q.group(1) if q else n))
+        out["items"].append({"num": num, "title": im.group(2).strip()[:200]})
     out["count"] = len(out["items"])
     return out
 
@@ -877,6 +1130,14 @@ def classify_lanes(lanes, prs, index, dev):
     running_name = (dev.get("running") or {}).get("name")
 
     done_rows = dev.get("done_rows") or {}
+    wq_by_gen = dev.get("wq_by_gen") or {}
+
+    def wq_disposition(gen):
+        """2026-10-19: a BOOT_READY gen -> its window-queue disposition (collect_window_queue), else a kit-window
+        trace, else None (nothing knows the kit: today's boot_ready need stands)."""
+        if not gen:
+            return None
+        return wq_by_gen.get(gen) or kit_window_disposition(gen)
 
     def kit_match(text):
         """A BOOT_READY/HANDBACK reason naming a kit manifest sha -> queue disposition.
@@ -911,6 +1172,12 @@ def classify_lanes(lanes, prs, index, dev):
         shown = re.sub(r"^[A-Z0-9_]+_STATUS\s+state=\S+\s*", "", (ls or {}).get("raw") or "")[:160]
         st_ts = parse_ts(ls["ts"]) if ls else parse_ts(ln["last_event_at"])
         st_age = age_s(st_ts)
+        # 2026-10-19: a BOOT_READY handback names its kit generation; the window queue says whether it is queued,
+        # HELD, active or already consumed, so only a kit nothing knows about stays a boot_ready need.
+        boot_ready_st = st == "BOOT_READY" or (st == "HANDBACK" and reason.upper().startswith("BOOT_READY"))
+        st_gen = (ls or {}).get("gen") if boot_ready_st else None
+        wqd = wq_disposition(st_gen) if st_gen else None
+        ln["window_queue"] = dict({k: wqd.get(k) for k in ("state", "text", "position")}, gen=st_gen) if wqd else None
         pr = ln.get("pr")
         pi = prs.get(pr) if pr else None
         pi = pi if pi and not pi.get("error") else None
@@ -1000,6 +1267,12 @@ def classify_lanes(lanes, prs, index, dev):
                     elif st == "BLOCKED" and blocker and blocker["status"] == "closed":
                         need("blocked", f"blocker {blocker['id']} is now closed; lane still BLOCKED, no driver",
                              "run.send the lane: its blocker landed; restart lane-drive.sh.")
+                    elif wqd and wqd["state"] != "consumed":
+                        wait(wqd["text"])
+                    elif wqd:
+                        need("handback", f"{wqd['text']}; lane still {st} BOOT_READY on gen {st_gen[:8]} with no live driver",
+                             "Read the window's receipt / close outcome, post the result to the lane (run.send) and drive "
+                             "it on (a retry is a new package + generation).")
                     elif km and km[0] == "pending":
                         wait(f"kit queued on the bench as {km[1]} (position {km[2]} of {dev['pending_count']})")
                     elif km and km[0] == "running":
@@ -1075,11 +1348,13 @@ def classify_lanes(lanes, prs, index, dev):
                         and rs not in (None,):
                     if km and km[0] == "pending":
                         wait(f"kit queued on the bench as {km[1]} (position {km[2]})")
+                    elif wqd:   # queued / held / active / consumed: the live driver carries the lane on
+                        wait(f"{wqd['text']}; driver alive, run {rs}")
                     else:
                         need(kind_for_state, f"{st} {fmt_age(st_age)} ago; a driver is alive but the run is {rs}",
                              "Read the handback; run.send the next step or release and stop the driver.")
                 elif st in NEEDS_STATES:
-                    wait(f"{st} just now; driver winding down")
+                    wait(f"{wqd['text']}; driver alive" if wqd else f"{st} just now; driver winding down")
                 elif st in (None, "NONE"):
                     if rs in ("admitted", None) and "error" in ri:
                         cls, why = "unknown", f"run state unknown ({ri.get('error', '')[:80]})"
@@ -1161,6 +1436,18 @@ def classify_device(dev):
                       "reason": f"queue-runner.sh not running with {dev['pending_count']} steps pending; bench idle",
                       "since": dev.get("log_mtime"), "age_s": age_s(parse_ts(dev.get("log_mtime"))),
                       "next": "Start queue-runner.sh (run_in_background) after a device_idle check."})
+    # 2026-10-19: lanes whose kit is queued in the window queue now wait instead of nagging boot_ready, so a stopped
+    # queue must surface on its own or those lanes would wait on nothing.
+    wq = dev.get("window_queue") or {}
+    if wq.get("depth") and (wq.get("paused") or wq.get("running") is False):
+        why = f"PAUSED ({wq.get('pause_line') or 'pause file'})" if wq.get("paused") else "not running"
+        nxt = ("Diagnose the STOP (needs/window-queue-stop-*.txt), then window-queue.sh --resume complete|incomplete "
+               "and restart it (run_in_background)." if wq.get("paused") else
+               "Start window-queue.sh (run_in_background); check window-queue.sh --status first.")
+        since = wq.get("pause_at") if wq.get("paused") else None
+        needs.append({"kind": "device", "id": "window-queue", "lane": None, "bead": None, "run": None, "pr": None,
+                      "reason": f"window queue {why[:160]} with {wq['depth']} rows pending", "since": since,
+                      "age_s": age_s(parse_ts(since)), "next": nxt})
     r = dev.get("running")
     if r and r["elapsed_s"] and r["elapsed_s"] > KIT_STUCK_H * 3600:
         needs.append({"kind": "stale", "id": r["name"], "lane": None, "bead": None, "run": None, "pr": None,
@@ -1451,6 +1738,7 @@ def main():
         prs = fut_prs.result()
     index, ready_ids = beads_box["index"], beads_box["ready"]
     dev = collect_device()
+    wq = dev["window_queue"]
     needs = classify_lanes(lanes, prs, index, dev)
     needs += classify_device(dev)
     needs += classify_host()
@@ -1521,7 +1809,8 @@ def main():
             "model", "provider", "runtime", "driver_alive", "driver_pids", "driver_etimes", "last_status",
             "last_event_at", "last_turn_end", "ci_wait", "pr", "pr_head", "reconciler_alive", "controller_alive",
             "runtime_alive", "native_activity_age_s", "messages_total", "worktree", "blocker_error", "runtime_parked",
-            "cls", "kind", "cls_reason", "next", "log", "log_mtime", "source", "status_age_s", "session_id")})
+            "cls", "kind", "cls_reason", "next", "log", "log_mtime", "source", "status_age_s", "session_id",
+            "window_queue")})
     summary = {
         "needs": len(needs),
         "lanes_total": len(shown),
@@ -1538,18 +1827,24 @@ def main():
         "stale": len(stale),
         "owner_asks": owner["count"],
         "device": {"running": (dev.get("running") or {}).get("name"), "pending": dev["pending_count"],
-                   "halted": dev["halted"], "runner_alive": dev["runner_alive"], "kit_running": dev["kit_running"]},
+                   "halted": dev["halted"], "runner_alive": dev["runner_alive"], "kit_running": dev["kit_running"],
+                   # 2026-10-19: the live queue (window-queue.sh); "pending" above stays the retired queue.tsv count
+                   "wq_depth": wq["depth"], "wq_held": wq["held_count"], "wq_active": (wq["active"] or {}).get("gen"),
+                   "wq_active_phase": (wq["active"] or {}).get("phase"), "wq_paused": wq["paused"],
+                   "wq_running": wq["running"]},
         "needs_by_kind": {k: sum(1 for n in needs if n["kind"] == k) for k in KIND_RANK},
         "beads_in_scope_in_progress": sum(1 for i, b in index.items() if in_scope(i) and b["status"] == "in_progress"),
         "beads_in_scope_open": sum(1 for i, b in index.items() if in_scope(i) and b["status"] == "open"),
     }
     dev.pop("pending_all", None)
     dev.pop("done_rows", None)
+    dev.pop("wq_by_gen", None)
     data = {
         "generated_at": iso(NOW), "generated_epoch": NOW.timestamp(), "host": socket.gethostname(),
         "runtime_s": round(time.time() - T0, 1),
         "thresholds": {k: v for k, v in globals().items() if k.isupper() and isinstance(v, (int, float, str))
-                       and k not in ("G", "MC", "BOARD", "OUT", "CACHE", "OWNER_ASKS", "PFTASK_BIN", "PFTASK_HOME", "NOW", "T0")},
+                       and k not in ("G", "MC", "BOARD", "OUT", "CACHE", "OWNER_ASKS", "PFTASK_BIN", "PFTASK_HOME", "NOW", "T0",
+                                     "WQ_BOARD", "KIT_WINDOWS")},
         "campaign_roots": CAMPAIGN_ROOTS,
         "errors": ERRORS, "summary": summary, "needs": needs, "waits": waited, "lanes": lane_rows,
         "released_runs": [{"lane": l["lane"], "run": l["run"], "bead": l.get("bead")} for l in released],
