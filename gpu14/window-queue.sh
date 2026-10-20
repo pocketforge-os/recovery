@@ -22,7 +22,11 @@
 # A preflight FAIL or a pre-boot CHAIN_STOP only fails that row (failed.tsv + needs/window-<kind>-<gen>.txt) and the
 # loop continues: nothing reached the device.
 # Test seams: GPU14_ROOT, WQ_BOARD, PF_KIT_WINDOWS_DIR, WQ_PREFLIGHT, WQ_CHAIN, WQ_CLOSE, WQ_POLL_S, WQ_WINDOW_MAX_S,
-#             WQ_PROBE, WQ_OWNER_MODEL.
+#             WQ_PROBE, WQ_OWNER_MODEL, WQ_DISPOSITION, WQ_COMMS, WQ_NOTE_FROM, WQ_NOTE_TO.
+# 2026-10-20 (tsp-mc9m.41.1030.56.2): a failed close gets ONE runner-validated first step (window-close.sh
+# --auto-first-step: de-energized safe teardown -> acknowledge-safe; stale pinned adapter -> recover-close). The queue
+# never decides safety: it advances only on AUTO_RECOVERED + rc 0 + runner State=closed + disposition RUN, logs
+# AUTO_RECOVERED, appends window-queue.auto-recovered.tsv and sends proc-coord a pf-comms note. Anything else: STOP.
 #        window-queue.sh --next     refresh capacity holds; print the generation that would open next (rc 6 = all held)
 # 2026-10-19 (drc window 14759329 lost to a gpt-5.6-sol retry_limit_429 mid-window): before choosing a row, owners whose
 # Codex model probe says full are HELD (fleet-board/window-queue.held) and skipped; later rows still run. A probe error
@@ -39,6 +43,8 @@ WIN=${PF_KIT_WINDOWS_DIR:-$HOME/.local/state/pocketforge/kit-windows}
 PROBE=${WQ_PROBE:-$R/model-capacity-probe.sh}; OWNER_MODEL=${WQ_OWNER_MODEL:-$R/owner-model.sh}; HELD=$FB/window-queue.held
 PREFLIGHT=${WQ_PREFLIGHT:-$SELF/kit-preflight.sh}; CHAIN=${WQ_CHAIN:-$R/window-chain.sh}; CLOSE=${WQ_CLOSE:-$R/window-close.sh}
 POLL=${WQ_POLL_S:-30}; MAXWIN=${WQ_WINDOW_MAX_S:-10800}
+DISPOSITION=${WQ_DISPOSITION:-$R/window-disposition.sh}; COMMS=${WQ_COMMS:-pf-comms}
+NOTE_FROM=${WQ_NOTE_FROM:-gpu-14}; NOTE_TO=${WQ_NOTE_TO:-proc-coord}; AUTOREC=$FB/window-queue.auto-recovered.tsv
 ts() { date -u +%FT%TZ; }
 say() { echo "$(ts) $*" | tee -a "$LOG"; }
 mkdir -p "$FB" "$NEEDS" "$MARK" "$LOGD"
@@ -163,6 +169,13 @@ stop() {  # stop <why> <detail>
   echo "WINDOW_QUEUE_EXIT reason=stop:$1 gen=${G:-} needs=$NEEDS/window-queue-stop-${G:-}.txt"; exit 10; }
 finish() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(ts)" "$G" "$OWNER" "$LANE" "$LABEL" "$1" "$P" >> "$DONE"; rm -f "$ACTIVE"; say "DONE gen=$G outcome=$1"; }
 phase() { sed -i "s/^phase=.*/phase=$1/" "$ACTIVE"; }
+auto_recovered() {  # auto_recovered "<AUTO_RECOVERED gen= class= receipt= existing= log=>": record + tell proc-coord
+  local line=${1%% log=*}
+  say "$line"; printf '%s\t%s\t%s\t%s\t%s\n' "$(ts)" "$G" "$LANE" "$LABEL" "$line" >> "$AUTOREC"
+  printf 'window-queue %s lane=%s label=%s: the close failed, the runner validated its one automatic first step from its own receipts, and the queue continued (the next window full-flashes). close log: %s\n' \
+    "$line" "$LANE" "$LABEL" "$LOGD/$G-close.txt" \
+    | timeout 60 "$COMMS" send --from "$NOTE_FROM" --to "$NOTE_TO" --topic coord --stdin >/dev/null 2>&1 \
+    || say "AUTO_RECOVERED_NOTE_FAILED gen=$G to=$NOTE_TO (recovery stands; tell $NOTE_TO by hand)"; }
 
 process_row() {
   local _ts pre prc ok note env_ok chain_log crc why st t0 m close_out clrc
@@ -242,9 +255,16 @@ process_row() {
     esac
     if [ -n "${m:-}" ]; then
       phase closing; say "CLOSE gen=$G reason=$m"
-      close_out=$("$CLOSE" "$G" "$m" 2>&1); clrc=$?; printf '%s\n' "$close_out" > "$LOGD/$G-close.txt"
+      close_out=$("$CLOSE" "$G" "$m" --auto-first-step 2>&1); clrc=$?; printf '%s\n' "$close_out" > "$LOGD/$G-close.txt"
       st=$(jq -r '.State // empty' "$WIN/$G/runner.json" 2>/dev/null)
-      [ "$clrc" = 0 ] && [ "$st" = closed ] || stop close_failed "window-close rc=$clrc state=$st: $(printf '%s' "$close_out" | tail -1 | cut -c1-200)"
+      auto=$(printf '%s\n' "$close_out" | grep -m1 "^AUTO_RECOVERED gen=$G class=[a-z_]* receipt=/")
+      if [ -n "$auto" ]; then
+        disp=$("$DISPOSITION" kit 2>/dev/null | head -1)
+        [ "$clrc" = 0 ] && [ "$st" = closed ] && [ "$disp" = RUN ] \
+          || stop close_failed "window-close rc=$clrc state=$st disposition=${disp:-none} after ${auto%% log=*}: $(printf '%s' "$close_out" | tail -1 | cut -c1-200)"
+        auto_recovered "$auto"
+      fi
+      [ "$clrc" = 0 ] && [ "$st" = closed ] || stop close_failed "window-close rc=$clrc state=$st: $(printf '%s' "$close_out" | tail -1 | cut -c1-400)"
       finish "closed:$m"
       [ -n "${RUNNER_FAILED:-}" ] && stop runner_failed "runner failed window $G ($RUNNER_FAILED); closed with failure; device state unknown, diagnose before resuming"
       return 0
