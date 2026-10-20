@@ -38,6 +38,7 @@ case "$*" in *" show "*) echo "PF_KIT_AUTOMATION_REPO=$FAKE_S/clone PF_KIT_TRUST
   *is-active*) echo active ;; esac'
   stub "$S/tool" 'echo "$*" >> "$FAKE_S/tool.calls"
 case "${FAKE_CLOSE:-teardown_failed}" in
+  slow) sleep 2; exit 2 ;;
   ok) echo "{\"State\":\"closed\"}" > "$PF_KIT_WINDOWS_DIR/$3/runner.json"; echo "PF_KIT_WINDOW_RUNNER state=closed generation=$3"; exit 0 ;;
   foreign) echo "PF_KIT_WINDOW_RUNNER_REFUSED reason=foreign_generation" >&2; exit 2 ;;
 esac
@@ -46,6 +47,7 @@ echo "PF_KIT_WINDOW_RUNNER_REFUSED reason=window_close_failed" >&2; exit 2'
   stub "$S/auto" 'printf "%s|repo=%s|trust=%s|key=%s|host=%s\n" "$*" "$PF_KIT_AUTOMATION_REPO" "$PF_KIT_TRUSTED_AUTOMATION_REPOS" "$PF_KIT_DUT_KEY_SECRET" "${PF_BENCH_DUT_HOST:-}" >> "$FAKE_S/auto.calls"
 r=$PF_KIT_WINDOWS_DIR/$2/auto-first-step-result.json
 case "${FAKE_AUTO:-recovered}" in
+  slow) sleep 2; exit 2 ;;
   recovered) echo "{\"State\":\"closed\"}" > "$PF_KIT_WINDOWS_DIR/$2/runner.json"
              echo "PF_KIT_WINDOW_RUNNER state=auto-recovered generation=$2 class=deenergized_staging_unverified receipt=$r existing=0" ;;
   othergen) echo "PF_KIT_WINDOW_RUNNER state=auto-recovered generation=0000 class=x receipt=$r existing=0" ;;
@@ -91,6 +93,12 @@ check wc_not_open_never_auto eval 'grep -q result=not_open "$S/out" && [ "$(call
 setup; "$WC" "$G" failure --bogus > "$S/out" 2>&1; rc=$?
 check wc_bad_flag_refused eval '[ "$rc" = 2 ] && grep -q reason=bad_flag "$S/out" && [ "$(calls tool)" = 0 ]'
 
+for mode in FAKE_CLOSE FAKE_AUTO; do  # a TERM during either operation still restarts the service
+  setup; env "$mode=slow" "$WC" "$G" failure --auto-first-step > "$S/out" 2>&1 & wpid=$!
+  sleep 0.7; kill -TERM "$wpid"; wait "$wpid"; rc=$?
+  check "wc_term_during_${mode}_restarts_service" eval '[ "$rc" = 143 ] && [ "$(grep -oE "stop|start" "$S/systemctl.calls" | tr "\n" " ")" = "stop start " ]'
+done
+
 # --- window-queue.sh ---------------------------------------------------------------------------------------------
 # refresh_held holds an owner with no live lane-drive.sh; a sleep named like one keeps the test owner unheld.
 bash -c "exec -a 'lane-drive.sh $OWN' sleep 600" & DRIVER_PID=$!
@@ -120,6 +128,17 @@ check wq_refused_no_note eval '[ "$(calls comms)" = 0 ] && ! grep -q AUTO_RECOVE
 
 setup; FAKE_COMMS=fail queue_once
 check wq_note_failure_does_not_stop eval '[ "$qrc" = 0 ] && grep -q "AUTO_RECOVERED_NOTE_FAILED gen=$G to=proc-coord" "$LOG" && [ ! -e "$S/root/fleet-board/window-queue.pause" ]'
+
+setup; mkdir "$S/root/fleet-board/window-queue.auto-recovered.tsv"; queue_once
+check wq_audit_write_failure_stops eval '[ "$qrc" = 10 ] && grep -q "STOP reason=close_failed gen=$G AUTO_RECOVERED .* but its audit write failed" "$LOG" && [ "$(calls comms)" = 0 ]'
+
+O=99999999999999999999999999999999
+setup; mkdir -p "$S/kw/$O"; echo '{"State":"failed"}' > "$S/kw/$O/runner.json"; echo '{}' > "$S/kw/$O/safe-acknowledgement.json"
+FAKE_DISP=HALT queue_once
+check wq_other_window_uses_disposition_seam_halt eval '[ "$qrc" = 5 ] && grep -q "other_window_open window=$O:failed" "$S/out"'
+setup; mkdir -p "$S/kw/$O"; echo '{"State":"failed"}' > "$S/kw/$O/runner.json"; echo '{}' > "$S/kw/$O/safe-acknowledgement.json"
+queue_once
+check wq_other_window_uses_disposition_seam_run eval '[ "$qrc" = 0 ] && grep -q "AUTO_RECOVERED gen=$G" "$LOG"'
 
 echo "WINDOW_CLOSE_AUTO_TEST pass=$pass fail=$fail"
 [ "$fail" = 0 ]

@@ -19,6 +19,12 @@ clone=$(sed -n 's/^PF_KIT_AUTOMATION_REPO=//p' <<<"$unit_env")
 [ -n "$clone" ] || clone=$(grep -oE 'deploy-clones/pa-[0-9a-f]+' "$R/build10-windows.md" | tail -1 | sed "s#^#$R/#")
 [ -d "$clone" ] || { echo "WINDOW_CLOSE_REFUSED reason=deploy_clone_unknown"; exit 3; }
 log="$R/close-${gen:0:8}.log"
+# The service must come back on every exit, including an INT/TERM while the close or the auto step runs.
+svc_stopped=1
+restore_service() { [ "$svc_stopped" = 1 ] || return 0; svc_stopped=0; "$SYSTEMCTL" --user start pf-kit-window-runner.service; }
+trap restore_service EXIT
+trap 'restore_service; exit 130' INT
+trap 'restore_service; exit 143' TERM
 "$SYSTEMCTL" --user stop pf-kit-window-runner.service
 # 2026-10-19: when staging_required, close needs the generation-bound DUT key ref and the bench route
 # (PF_BENCH_DUT_HOST and friends). The service gets them from its env file; an in-process close must load it too.
@@ -50,7 +56,7 @@ if [ "$rc" -ne 0 ] && [ "$auto_step" = 1 ] && [ "$not_open" = 0 ]; then
     auto_refused="auto=${auto_refused:-rc_$arc} auto_log=$alog"
   fi
 fi
-"$SYSTEMCTL" --user start pf-kit-window-runner.service
+restore_service
 svc=$("$SYSTEMCTL" --user is-active pf-kit-window-runner.service)
 state=$(grep -o 'PF_KIT_WINDOW_RUNNER state=[a-z_]*' "$log" | tail -1)
 if [ "$not_open" = 1 ]; then

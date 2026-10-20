@@ -128,7 +128,7 @@ other_window() {  # same rule as window-chain.sh: any runner.json State other th
     # 2026-10-18 (5b629cf4, tsp-mc9m.41.1018.12.39): a failed close with a runner-validated safe acknowledgement is closed
     # for queue purposes, but ONLY when the deployed runner's own queue-disposition says RUN (it re-validates the receipt).
     case "$s" in closed|"") ;;
-      failed) if [ -f "$d/safe-acknowledgement.json" ] && [ "$("$R/window-disposition.sh" kit 2>/dev/null | head -1)" = RUN ]; then :
+      failed) if [ -f "$d/safe-acknowledgement.json" ] && [ "$("$DISPOSITION" kit 2>/dev/null | head -1)" = RUN ]; then :
               else echo "$(basename "$d"):$s"; return 0; fi ;;
       *) echo "$(basename "$d"):$s"; return 0 ;; esac; done; return 1; }
 # 2026-10-19: while Codex turns fail ~40% (owners blocked mid-window: battsafe 07:13Z, mem 08:39Z), gpu-14 lists the
@@ -171,7 +171,10 @@ finish() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(ts)" "$G" "$OWNER" "$LANE" "
 phase() { sed -i "s/^phase=.*/phase=$1/" "$ACTIVE"; }
 auto_recovered() {  # auto_recovered "<AUTO_RECOVERED gen= class= receipt= existing= log=>": record + tell proc-coord
   local line=${1%% log=*}
-  say "$line"; printf '%s\t%s\t%s\t%s\t%s\n' "$(ts)" "$G" "$LANE" "$LABEL" "$line" >> "$AUTOREC"
+  # The audit trail is the only record of an automatic recovery: a failed local write STOPs the queue.
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(ts)" "$G" "$LANE" "$LABEL" "$line" >> "$AUTOREC" && echo "$(ts) $line" >> "$LOG" \
+    || stop close_failed "${line} but its audit write failed ($AUTOREC / $LOG); the window IS closed, record it by hand"
+  echo "$(ts) $line"
   printf 'window-queue %s lane=%s label=%s: the close failed, the runner validated its one automatic first step from its own receipts, and the queue continued (the next window full-flashes). close log: %s\n' \
     "$line" "$LANE" "$LABEL" "$LOGD/$G-close.txt" \
     | timeout 60 "$COMMS" send --from "$NOTE_FROM" --to "$NOTE_TO" --topic coord --stdin >/dev/null 2>&1 \
