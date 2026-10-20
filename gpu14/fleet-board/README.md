@@ -192,5 +192,5 @@ gpu14/fleet-board/install-fleet-board.sh --check   # typed fleet_board_drift lin
 gpu14/fleet-board/install-fleet-board.sh --apply   # install drifted files (.bak-<UTC> kept), daemon-reload, restart the timer
 ```
 
-Only collect.py, render.py, refresh.sh, velocity.py and the two units are written; the board's data files are
+Only collect.py, render.py, refresh.sh, velocity.py, hardware-rows.json and the two units are written; the board's data files are
 never touched. `FB_LIVE_DIR`, `FB_UNIT_DIR` and `SYSTEMCTL` redirect it (`test_install.py`).

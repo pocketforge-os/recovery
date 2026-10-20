@@ -448,7 +448,9 @@
       "driver": "none (no owned A133 hardware encoder driver)",
       "driver_source": "none",
       "inventory_driver_config": "No owned A133 hardware encoder driver/config is identified.",
-      "anchor": [],
+      "anchor": [
+        "tsp-mc9m.60.29.46"
+      ],
       "seed_state": "Broken",
       "seed_at": "2026-10-18",
       "seed_evidence": "No hardware video encoder appears yet (only decode and rotation). Needed later for capture."

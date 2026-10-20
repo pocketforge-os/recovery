@@ -18,7 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "install-fleet-board.sh")
 UNIT_SRC = os.path.join(os.path.dirname(HERE), "systemd")   # gpu14/systemd: the one tracked copy of each unit
 REPO = os.path.dirname(os.path.dirname(HERE))
-SCRIPTS = ("collect.py", "render.py", "refresh.sh", "velocity.py")
+SCRIPTS = ("collect.py", "render.py", "refresh.sh", "velocity.py", "hardware-rows.json")
 UNITS = ("pf-fleet-board.service", "pf-fleet-board.timer")
 # Live-only data next to the scripts: --apply must leave every one byte-identical and add nothing beside them.
 DATA = ("parked.tsv", "waits.tsv", "data.json", "needs/n1.json", "window-done/w1", "lanes-added.log",
@@ -126,6 +126,18 @@ class InstallFleetBoard(unittest.TestCase):
         baks = [os.path.join(self.live, f) for f in os.listdir(self.live) if f.startswith("render.py.bak-")]
         contents = sorted(open(b).read() for b in baks)
         self.assertEqual(contents, [f"hand edit {n}\n" for n in range(3)])
+
+    def test_files_collect_reads_beside_itself_are_managed(self):
+        # collect.py's default catalog path is next to the deployed collector; a clean install must put it there.
+        with open(os.path.join(HERE, "collect.py")) as f:
+            src = f.read()
+        beside = set(re.findall(r'os\.path\.dirname\(os\.path\.abspath\(__file__\)\), "([^"]+)"', src))
+        self.assertIn("hardware-rows.json", beside)
+        self.assertLessEqual(beside, set(SCRIPTS))
+        r = self.run_script("--apply")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertRegex(r.stdout, r"(?m)^fleet_board_installed file=hardware-rows\.json ")
+        self.assertEqual(sha(os.path.join(self.live, "hardware-rows.json")), sha(os.path.join(HERE, "hardware-rows.json")))
 
     def test_check_reports_missing_as_typed_drift(self):
         r = self.run_script("--check")
