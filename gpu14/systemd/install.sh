@@ -18,6 +18,8 @@ for u in pf-fleet-board.service pf-fleet-board.timer pf-reports-http.service pf-
 done
 systemctl --user daemon-reload
 systemctl --user enable --now pf-reports-http.service pf-fleet-board.timer pf-shared-refresh.timer
+# enable --now leaves an already-active timer as it was; restart applies OnActiveSec= so it re-arms (tsp-mc9m.41.1030.45.1).
+systemctl --user restart pf-fleet-board.timer
 # Serving a port (not a file path) avoids needing root; the tailnet operator must be this user (tailscale set --operator).
 [ "${1:-}" = --no-tailscale ] || tailscale serve --bg 8765
 systemctl --user --no-pager status pf-reports-http.service pf-fleet-board.timer pf-shared-refresh.timer | grep -E '^\S|Active:'
