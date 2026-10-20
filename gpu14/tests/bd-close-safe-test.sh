@@ -5,8 +5,12 @@
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 SCRIPT=${BD_CLOSE_SAFE_SCRIPT:-$HERE/bd-close-safe.sh}
-# Safety: a script without the root overrides would read the LIVE gpu14 dir and wt root. Refuse to exercise it.
-grep -q 'GPU14_ROOT' "$SCRIPT" || { echo "FAIL  $SCRIPT has no GPU14_ROOT override; refusing to run it non-hermetically"; exit 1; }
+# Safety: a script without the root and bd overrides would read the LIVE gpu14 dir and wt root, or run the REAL bd.
+# Refuse to exercise it. The bd double is passed by BD_CLOSE_SAFE_BD only, never put on PATH (tsp-mc9m.41.1030.58),
+# and it never execs the shim or the real bd.
+for knob in GPU14_ROOT BD_CLOSE_SAFE_BD; do
+  grep -q "$knob" "$SCRIPT" || { echo "FAIL  $SCRIPT has no $knob override; refusing to run it non-hermetically"; exit 1; }
+done
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 PASS=0; FAIL=0
 ok() { PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
@@ -54,6 +58,12 @@ git -C "$TMP/seed" switch -q -c old; git -C "$TMP/seed" -c user.email=t@t -c use
 OLDONLY=$(git -C "$TMP/seed" rev-parse HEAD); git -C "$TMP/seed" switch -q main
 git clone -q --bare "$TMP/seed" "$TMP/moved.git"; git -C "$TMP/moved.git" symbolic-ref HEAD refs/heads/old
 git clone -q "$TMP/moved.git" "$SRC/moved"; git -C "$TMP/moved.git" symbolic-ref HEAD refs/heads/main
+# pf-wt mirrors (no shared checkout): mirrored is a bare clone of origin taken BEFORE commit NEWER landed, so only a
+# fetch proves NEWER; badmirror's origin is unreachable.
+mkdir -p "$WT/.mirrors"; git clone -q --bare "$TMP/origin.git" "$WT/.mirrors/mirrored.git"
+git clone -q --bare "$TMP/origin.git" "$WT/.mirrors/badmirror.git"; git -C "$WT/.mirrors/badmirror.git" remote set-url origin "$TMP/no-such-origin.git"
+git -C "$SRC/src" -c user.email=t@t -c user.name=t commit -q --allow-empty -m newer; git -C "$SRC/src" push -q origin HEAD:main
+NEWER=$(git -C "$SRC/src" rev-parse HEAD)
 
 admit() { # name run_id task worktree state
   printf '{"run_id":"%s"}\n' "$2" > "$GPU/admission-$1.json"
@@ -62,9 +72,8 @@ admit() { # name run_id task worktree state
 }
 run_case() { # args...
   rm -f "$CALLS"/bd.*
-  # -u BASH_ENV: a login BASH_ENV may re-prepend ~/.local/bin and resolve the REAL bd.
-  out=$(cd "$TMP" && env -u BASH_ENV -u BD_CLOSE_FOREIGN_OK PATH="$STUBS:$PATH" GPU14_ROOT="$GPU" BD_CLOSE_SAFE_WT_ROOT="$WT" \
-        BD_CLOSE_SAFE_SRC_ROOT="$SRC" BD_CLOSE_SAFE_MC="$MC" ${CASE_ENV:-} bash "$SCRIPT" "$@" 2>&1); rc=$?
+  out=$(cd "$TMP" && env -u BASH_ENV -u BD_CLOSE_FOREIGN_OK BD_CLOSE_SAFE_BD="$STUBS/bd" GPU14_ROOT="$GPU" BD_CLOSE_SAFE_WT_ROOT="$WT" \
+        BD_CLOSE_SAFE_SRC_ROOT="$SRC" BD_CLOSE_SAFE_MC="$MC" BD_CLOSE_SAFE_LOCK_DIR="$TMP/locks" ${CASE_ENV:-} bash "$SCRIPT" "$@" 2>&1); rc=$?
 }
 nbd() { local n=0 f; for f in "$CALLS"/bd.*; do [[ "$f" =~ /bd\.[0-9]+$ ]] && n=$((n+1)); done; echo "$n"; }
 bdargs() { tr '\n' ' ' < "$CALLS/bd.$1" | sed 's/ $//'; }
@@ -73,13 +82,16 @@ expect() { # name expected_rc expected_out
 }
 
 RA=pft-aaaaaaaaaaaaaaaaaaaaaaaa; RB=pft-bbbbbbbbbbbbbbbbbbbbbbbb; RK=pft-cccccccccccccccccccccccc; RJ=pft-dddddddddddddddddddddddd
-RU=pft-eeeeeeeeeeeeeeeeeeeeeeee
+RU=pft-eeeeeeeeeeeeeeeeeeeeeeee; RM=pft-ffffffffffffffffffffffff; RN=pft-111111111111111111111111
+mkdir -p "$TMP/locks"
 admit a $RA tsp-a "$WT/tsp-a/repo" released
 admit b $RB tsp-b "$WT/tsp-b/repo" awaiting_release
 admit k $RK tsp-k "$WT/tsp-k/repo" awaiting_release
 admit k2 $RK tsp-k2 "$WT/tsp-k2/repo" awaiting_release
 admit j $RJ tsp-k2 "$WT/tsp-k2-other/repo" interruption_unknown
 admit u $RU tsp-u "$WT/tsp-u/repo" -; touch "$STATES/$RU.unresolved"
+admit m1 $RN tsp-m "$WT/tsp-m/repo" awaiting_release
+admit m2 $RM tsp-m "$WT/tsp-m/other" released
 mkdir -p "$WT/tsp-f/repo"   # tsp-f: a set with no gpu-14 admission
 
 echo '-- legacy (no --keep-for-run): output byte-for-byte as before'
@@ -122,12 +134,21 @@ grep -q "^BD_CLOSE_SAFE_CHECK would_comment release_bead=tsp-rel line='typed_clo
 run_case --keep-for-run $RK tsp-k $GOOD
 [ "$rc" = 0 ] && grep -q "^BD_CLOSE_SAFE_TYPED_CLOSED bead=tsp-k kept=$RK release_tracked_by=tsp-rel$" <<<"$out" \
   && ok 'kept run closes' || bad "kept run closes (rc=$rc out=$out)"
-[ "$(nbd)" = 2 ] && [ "$(bdargs 0)" = "cwd=$MC close tsp-k --keep-worktree --reason $GOOD" ] \
-  && ok 'success passes --keep-worktree and the full reason' || bad "success passes --keep-worktree ($(bdargs 0 2>/dev/null))"
+[ "$(nbd)" = 2 ] && [ "$(bdargs 0)" = "cwd=$MC close tsp-k --keep-worktree --kept-live-worktree $WT/tsp-k/repo --reason $GOOD" ] \
+  && ok 'success passes --keep-worktree, --kept-live-worktree <kept wt> and the full reason' || bad "success passes --keep-worktree ($(bdargs 0 2>/dev/null))"
 [ "$(bdargs 1)" = "cwd=$MC comment tsp-rel --stdin" ] \
   && [ "$(cat "$CALLS/bd.1.stdin")" = "typed_close bead=tsp-k unreleased_run=$RK worktree=$WT/tsp-k/repo $WIM" ] \
   && ok 'success writes the tracking comment on release_tracked_by' || bad "tracking comment ($(bdargs 1 2>/dev/null) / $(cat "$CALLS/bd.1.stdin" 2>/dev/null))"
 [ -d "$WT/tsp-k/repo" ] && ok 'kept worktree is left in place' || bad 'kept worktree is left in place'
+
+run_case --keep-for-run $RN tsp-m "unreleased_run=$RN $WIM release_tracked_by=tsp-rel"
+[ "$rc" = 0 ] && [ "$(bdargs 0)" = "cwd=$MC close tsp-m --keep-worktree --kept-live-worktree $WT/tsp-m/repo --reason unreleased_run=$RN $WIM release_tracked_by=tsp-rel" ] \
+  && ok '--kept-live-worktree is passed for kept runs only (not the released run)' || bad "kept-live for kept only (rc=$rc out=$out argv=$(bdargs 0 2>/dev/null))"
+
+run_case --keep-for-run $RK tsp-k "unreleased_run=$RK work_in_main=pocketforge-os/mirrored@$NEWER release_tracked_by=tsp-rel"
+[ "$rc" = 0 ] && grep -q "^BD_CLOSE_SAFE work_in_main=pocketforge-os/mirrored@$NEWER ancestor_of=origin/main via=mirror:$WT/.mirrors/mirrored.git$" <<<"$out" \
+  && ok 'missing shared checkout falls back to the fetched pf-wt mirror' || bad "mirror fallback (rc=$rc out=$out)"
+[ -e "$TMP/locks/pf-wt-mirrored.lock" ] && ok 'mirror fetch serializes on the pf-wt mirror lock' || bad "mirror lock ($(ls "$TMP/locks"))"
 
 CASE_ENV=FAKE_BD_COMMENT_FAIL=1 run_case --keep-for-run $RK tsp-k $GOOD
 [ "$rc" = 4 ] && grep -q "^BD_CLOSE_SAFE_TRACK_FAILED bead=tsp-k release_bead=tsp-rel append='typed_close bead=tsp-k unreleased_run=$RK worktree=$WT/tsp-k/repo $WIM'" <<<"$out" \
@@ -172,7 +193,9 @@ expect 'close: kept run with no reason refuses before any lookup' 2 "BD_CLOSE_SA
 
 for spec in "non-ancestor sha|work_in_main=src@$UNLANDED|not_ancestor" \
             "fetch failure|work_in_main=nofetch@$LANDED|fetch_failed" \
-            "missing repo dir|work_in_main=pocketforge-os/absent@$LANDED|repo_missing" \
+            "missing checkout and missing mirror|work_in_main=pocketforge-os/absent@$LANDED|repo_missing" \
+            "mirror fetch failure|work_in_main=badmirror@$LANDED|fetch_failed" \
+            "mirror non-ancestor|work_in_main=mirrored@$UNLANDED|not_ancestor" \
             "one bad of two|$WIM work_in_main=src@$UNLANDED|not_ancestor" \
             "stale cached origin/HEAD|work_in_main=moved@$OLDONLY|not_ancestor of=origin/main"; do
   IFS='|' read -r name wim detail <<<"$spec"

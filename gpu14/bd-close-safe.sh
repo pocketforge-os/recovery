@@ -22,6 +22,9 @@ R=${GPU14_ROOT:-/home/matt/recovery/gpu14}
 WT=${BD_CLOSE_SAFE_WT_ROOT:-/home/matt/wt}
 MC=${BD_CLOSE_SAFE_MC:-/home/matt/mission-control}
 SRC=${BD_CLOSE_SAFE_SRC_ROOT:-/home/matt}
+# 2026-10-20 (tsp-mc9m.41.995.130.4): tests point BD_CLOSE_SAFE_BD at a canned double; never a bd stub on PATH
+# (a PATH stub that fell through to the shim looped 114k processes, tsp-mc9m.41.1030.58).
+BD=${BD_CLOSE_SAFE_BD:-bd}
 check=0; keep_runs=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -93,7 +96,7 @@ if [ "$blocked" -gt 0 ]; then
 fi
 if [ "${#kept[@]}" -eq 0 ]; then
   [ "$check" = 1 ] && { echo "BD_CLOSE_SAFE_CHECK_OK bead=$bead"; exit 0; }
-  cd "$MC" && bd close "$bead" --reason "$*"
+  cd "$MC" && "$BD" close "$bead" --reason "$*"
   exit
 fi
 # Typed close: validate the reason tokens, then prove every work_in_main is in its origin default branch.
@@ -132,11 +135,11 @@ if [ "$check" = 1 ]; then
   echo "BD_CLOSE_SAFE_CHECK_OK bead=$bead keep_worktree=1 kept=$kept_ids release_tracked_by=$rel"; exit 0
 fi
 cd "$MC" || { echo "BD_CLOSE_SAFE_REFUSED reason=mission_control_missing dir=$MC"; exit 2; }
-bd close "$bead" --keep-worktree --reason "$*" || { rc=$?; echo "BD_CLOSE_SAFE_CLOSE_FAILED bead=$bead rc=$rc"; exit "$rc"; }
+"$BD" close "$bead" --keep-worktree --reason "$*" || { rc=$?; echo "BD_CLOSE_SAFE_CLOSE_FAILED bead=$bead rc=$rc"; exit "$rc"; }
 track_failed=0
 for e in "${kept[@]}"; do
   line=$(track_line "$e")
-  if printf '%s\n' "$line" | bd comment "$rel" --stdin >/dev/null; then echo "BD_CLOSE_SAFE_TRACKED release_bead=$rel run=${e%% *}"
+  if printf '%s\n' "$line" | "$BD" comment "$rel" --stdin >/dev/null; then echo "BD_CLOSE_SAFE_TRACKED release_bead=$rel run=${e%% *}"
   else echo "BD_CLOSE_SAFE_TRACK_FAILED bead=$bead release_bead=$rel append='$line' hint=bead is CLOSED; append by hand: bd comment $rel --stdin"; track_failed=1; fi
 done
 [ "$track_failed" = 0 ] || exit 4
