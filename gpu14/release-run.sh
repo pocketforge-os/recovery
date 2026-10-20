@@ -36,10 +36,42 @@ if [ -n "${PRESERVATION:-}" ]; then
   spec=${PRESERVATION#bundle:}; PRES_PATH=${spec%'#'*}; PRES_SHA=${spec##*'#'}
   [[ "$PRES_SHA" =~ ^[0-9a-f]{64}$ ]] || { echo "RELEASE_REFUSED reason=preservation_sha256_malformed"; exit 2; }
   [ -n "${SUPERSEDED_BY:-}" ] || { echo "RELEASE_REFUSED reason=preservation_requires_superseded_by"; exit 2; }
-  { [ -f "$PRES_PATH" ] && [ ! -L "$PRES_PATH" ]; } || { echo "RELEASE_REFUSED reason=preservation_not_regular_file path=$PRES_PATH"; exit 2; }
-  pres_real=$(realpath -e "$PRES_PATH" 2>/dev/null); pres_base=$(realpath -e "$PRESERVED_BASE" 2>/dev/null)
-  case "$pres_real" in "$pres_base"/?*) ;; *) echo "RELEASE_REFUSED reason=preservation_outside_root path=$PRES_PATH root=$PRESERVED_BASE"; exit 2 ;; esac
-  [ "$(sha256sum < "$PRES_PATH" | cut -d' ' -f1)" = "$PRES_SHA" ] || { echo "RELEASE_REFUSED reason=preservation_sha256_mismatch path=$PRES_PATH"; exit 2; }
+  # One open file identity (O_NOFOLLOW, fstat regular) is contained, hashed and re-matched to the path; an
+  # unresolvable root refuses. pf-task re-verifies the bundle independently (hash before and after).
+  pres_why=$(python3 - "$PRES_PATH" "$PRESERVED_BASE" "$PRES_SHA" <<'PY'
+import hashlib, os, stat, sys
+path, base, want = sys.argv[1:]
+try:
+    root = os.path.realpath(base, strict=True)
+except OSError:
+    print("preservation_root_unresolved"); sys.exit()
+if not os.path.isdir(root):
+    print("preservation_root_unresolved"); sys.exit()
+try:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+except OSError:
+    print("preservation_not_regular_file"); sys.exit()
+with os.fdopen(fd, "rb") as stream:
+    held = os.fstat(fd)
+    if not stat.S_ISREG(held.st_mode):
+        print("preservation_not_regular_file"); sys.exit()
+    real = os.path.realpath("/proc/self/fd/%d" % fd)
+    if os.path.commonpath([root, real]) != root or real == root:
+        print("preservation_outside_root"); sys.exit()
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: stream.read(1 << 20), b""):
+        digest.update(chunk)
+    try:
+        now = os.lstat(path)
+    except OSError:
+        now = None
+    if now is None or (now.st_dev, now.st_ino) != (held.st_dev, held.st_ino):
+        print("preservation_path_changed"); sys.exit()
+    if digest.hexdigest() != want:
+        print("preservation_sha256_mismatch")
+PY
+)
+  [ -z "$pres_why" ] || { echo "RELEASE_REFUSED reason=$pres_why path=$PRES_PATH root=$PRESERVED_BASE"; exit 2; }
   KEEP=1
 fi
 # 2026-10-06: coordinator lanes live in `bd worktree` trees named by lane (mc-compositor-lane-g1),

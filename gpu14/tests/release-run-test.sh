@@ -107,6 +107,11 @@ for spec in "bundle:$bundle#$(printf 1%.0s {1..64})|preservation_sha256_mismatch
   [ "$rc" = 2 ] && grep -q "${spec#*|}" <<<"$out" && [ ! -e "$CALLS/release.json" ] \
     && ok "pre-check ${spec#*|} refuses before release" || bad "pre-check ${spec#*|} refuses before release (rc=$rc out=$out)"
 done
+# An unresolvable preserved root refuses (never widens to "any absolute path").
+run_case tsp-bundle SUPERSEDED_BY=tsp-x.1 SUPERSEDE_REASON=r PRESERVATION="bundle:$TMP/outside.bundle#$sha" \
+  PF_RELEASE_PRESERVED_BASE="$TMP/no-such-root" STUB_RECEIPT="$good_receipt"
+[ "$rc" = 2 ] && grep -q preservation_root_unresolved <<<"$out" && [ ! -e "$CALLS/release.json" ] \
+  && ok 'unresolvable preserved root refuses' || bad "unresolvable preserved root refuses (rc=$rc out=$out)"
 run_case tsp-bundle PRESERVATION="bundle:$bundle#$sha" STUB_RECEIPT="$good_receipt"
 [ "$rc" = 2 ] && grep -q preservation_requires_superseded_by <<<"$out" && [ ! -e "$CALLS/release.json" ] \
   && ok 'PRESERVATION without SUPERSEDED_BY refuses' || bad "PRESERVATION without SUPERSEDED_BY refuses (rc=$rc out=$out)"
