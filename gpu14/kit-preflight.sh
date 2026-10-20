@@ -60,7 +60,7 @@ emit() {  # emit <id> <PASS|FAIL|SKIP> <reason>
   local id=$1 res=$2 why=$3 var="KIT_PREFLIGHT_OVERRIDE_$1" ov
   ov=${!var:-}
   if [ "$res" = FAIL ] && [ -n "$ov" ]; then
-    if [ "$id" = C2deny ] || [ "$id" = C9 ] || [ "$id" = C10 ] || [ "$id" = C11 ]; then why="$why override_refused=not_overridable"
+    if [ "$id" = C2deny ] || [ "$id" = C9 ] || [ "$id" = C10 ] || [ "$id" = C11 ] || [ "$id" = C13 ]; then why="$why override_refused=not_overridable"
     elif [ "${#ov}" -lt 10 ]; then why="$why override_refused=reason_too_short"
     else
       echo "KIT_PREFLIGHT check=$id result=PASS reason=override:$why override=\"$(clean "$ov")\""
@@ -603,7 +603,43 @@ c12() {
   else emit C12 FAIL "$(join "${why[@]}") (the runner fills the bundle after boot-open; remove it, drop it from the manifest, reseal a NEW generation)"; fi
 }
 
-c1; c2; c2store; c3; c7; c8; c9; c10; c11; c12
+# C13 (2026-10-20 14:22Z, budget replay 946aed02: staged, full FelBoot, then boot-open RESUME_RECEIPT_WRITE_FAILED):
+# the template carried "OriginalBootReceipt": "@ORIGINAL_BOOT_RECEIPT@" unrendered and nothing validated it before FEL
+# (tsp-mc9m.41.1030.47). Every boot-open request in the package must have no @NAME@ token except the two the runtime
+# renders, and an OriginalBootReceipt that is absolute, realpath-inside <package>/series/, and not yet written. The
+# automation stage and session-resume make the same refusal (ORIGINAL_BOOT_RECEIPT_PATH_INVALID /
+# UNRENDERED_TEMPLATE_TOKEN). Not overridable: a FAIL here always costs a boot.
+c13() {
+  local why=() files=() f toks bad receipt series resolved
+  for f in boot-open-request.template.json boot-open-request.json stage/boot-open-request.json; do
+    [ -f "$P/$f" ] && files+=("$f")
+  done
+  if [ ${#files[@]} -eq 0 ]; then emit C13 SKIP "no_boot_open_request"; return; fi
+  series=$(realpath -m -- "$P/series")
+  for f in "${files[@]}"; do
+    toks=$(grep -oE '@[A-Za-z0-9_]+@' "$P/$f" 2>/dev/null | sort -u)
+    bad=$(printf '%s\n' "$toks" | grep -vxE '@POST_OPEN_ANCHOR_SHA256@|@STAGE_FROM_SEED_KIT@|' | tr '\n' ',' | sed 's/,$//')
+    [ -n "$bad" ] && why+=("UNRENDERED_TEMPLATE_TOKEN file=$f tokens=$bad")
+    if ! receipt=$(jq -er '.OriginalBootReceipt | strings' "$P/$f" 2>/dev/null); then
+      why+=("ORIGINAL_BOOT_RECEIPT_PATH_INVALID file=$f receipt=unreadable"); continue
+    fi
+    if [ "${receipt#/}" = "$receipt" ]; then
+      why+=("ORIGINAL_BOOT_RECEIPT_PATH_INVALID file=$f receipt=not_absolute:$(clean "$receipt")"); continue
+    fi
+    resolved=$(realpath -m -- "$receipt")
+    case "$resolved" in
+      "$series"/?*) ;;
+      *) why+=("ORIGINAL_BOOT_RECEIPT_PATH_INVALID file=$f receipt=outside_series:$(clean "$resolved")"); continue ;;
+    esac
+    if [ -e "$receipt" ] || [ -L "$receipt" ] || [ -e "$resolved" ]; then
+      why+=("ORIGINAL_BOOT_RECEIPT_PATH_INVALID file=$f receipt=exists:$(clean "$resolved")")
+    fi
+  done
+  if [ ${#why[@]} -eq 0 ]; then emit C13 PASS "boot_open_requests_rendered files=$(join "${files[@]}")"
+  else emit C13 FAIL "$(join "${why[@]}") (render the template field and reseal a NEW generation)"; fi
+}
+
+c1; c2; c2store; c3; c7; c8; c9; c10; c11; c12; c13
 [ -n "$CHAIN_PATHS_OK" ] && echo "KIT_PREFLIGHT chain_paths_ok=$CHAIN_PATHS_OK"
 if [ ${#FAILED[@]} -eq 0 ]; then
   echo "KIT_PREFLIGHT result=PASS failed=- gen=$G image=${RAW:0:8} overrides=$(join "${OVERRIDES[@]}" | sed 's/^$/-/') paths_exempt=$PATHS_EXEMPT"; exit 0

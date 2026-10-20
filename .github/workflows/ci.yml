@@ -21,6 +21,8 @@ jobs:
         run: |
           python3 -B gpu14/lane_wtrm_test.py
           bash gpu14/tests/release-run-test.sh
+      - name: gpu14 kit-preflight boot-open request controls
+        run: bash gpu14/tests/kit-preflight-boot-open-test.sh
       - name: Battery probe hermetic controls
         run: env PATH=/usr/bin:/bin python3 -B -I tsp-mc9m.60.29.6/test_battery_probe.py
       - name: Test
