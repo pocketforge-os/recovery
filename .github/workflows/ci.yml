@@ -23,6 +23,8 @@ jobs:
           bash gpu14/tests/release-run-test.sh
       - name: gpu14 kit-preflight boot-open request controls
         run: bash gpu14/tests/kit-preflight-boot-open-test.sh
+      - name: gpu14 kit-preflight C9/C10/C11 fail-closed controls
+        run: bash gpu14/tests/kit-preflight-fail-closed-test.sh
       - name: Battery probe hermetic controls
         run: env PATH=/usr/bin:/bin python3 -B -I tsp-mc9m.60.29.6/test_battery_probe.py
       - name: Test

@@ -542,21 +542,39 @@ c9() {
   [ -z "$a" ] && a=$(grep -rhoE 'AutomationSHA[^0-9a-f]{1,6}[0-9a-f]{40}' "$P"/*.json 2>/dev/null | grep -oE '[0-9a-f]{40}' | head -1)
   [[ $a =~ ^[0-9a-f]{40}$ ]] || { emit C9 FAIL "automation_sha_unknown"; return; }
   [ -f "$fl" ] || { emit C9 FAIL "floor_file_missing $fl"; return; }
+  # Fail closed (tsp-mc9m.41.1030.47.1): an unreadable floor, a malformed entry or a floor with no entries never passes.
+  local floor line n=0 bad=""
+  floor=$(cat -- "$fl" 2>/dev/null) || { emit C9 FAIL "floor_file_unreadable $fl"; return; }
   git -C "$D" cat-file -e "$a^{commit}" 2>/dev/null || { emit C9 FAIL "automation_sha_unreachable_in_runner sha=${a:0:12} runner=$(basename "$D")"; return; }
-  while read -r sha why; do
-    [[ $sha =~ ^[0-9a-f]{40}$ ]] || continue
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
+    read -r sha why <<<"$line"
+    if ! [[ $sha =~ ^[0-9a-f]{40}$ ]] || [ -z "$why" ]; then bad="$bad $(clean "${line:0:24}" | tr " " _)"; continue; fi
+    n=$((n+1))
     git -C "$D" merge-base --is-ancestor "$sha" "$a" 2>/dev/null || missing="$missing ${sha:0:12}:${why%% *}"
-  done < "$fl"
-  if [ -z "$missing" ]; then emit C9 PASS "automation=${a:0:12} contains_floor=$(grep -cE '^[0-9a-f]{40}' "$fl")"
+  done <<<"$floor"
+  if [ -n "$bad" ]; then emit C9 FAIL "floor_entry_malformed entries=$(echo $bad | tr ' ' ',') (each line: <40-hex sha> <reason>)"
+  elif [ "$n" -eq 0 ]; then emit C9 FAIL "floor_empty $fl"
+  elif [ -z "$missing" ]; then emit C9 PASS "automation=${a:0:12} contains_floor=$n"
   else emit C9 FAIL "checkout_predates_floor automation=${a:0:12} missing=${missing# } (re-seal at the deployed runner head)"; fi
 }
 
 # C10 (2026-10-19 22:13Z, slaudio 3abddadb RESUME_RECEIPT_EXISTS; drc d3b779ec copied 2dccce87's series/): a sealed package
 # must carry no window receipts. A generation opens once; any series/ file other than a lock means it is spent or copied.
+# Every entry counts, hidden and dangling ones included, and an unreadable series/ fails (tsp-mc9m.41.1030.47.1).
 c10() {
-  local f found=""
+  local f found="" entries
+  if [ -L "$P/series" ] || { [ -e "$P/series" ] && [ ! -d "$P/series" ]; }; then
+    emit C10 FAIL "series_not_directory (reseal a NEW package dir and generation)"; return
+  fi
   if [ -d "$P/series" ]; then
-    for f in "$P"/series/*; do [ -e "$f" ] || continue; case "$f" in *.lock) ;; *) found="$found ${f##*/}" ;; esac; done
+    entries=$(find "$P/series" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null) && [ -r "$P/series" ] && [ -x "$P/series" ] \
+      || { emit C10 FAIL "series_unreadable (reseal a NEW package dir and generation)"; return; }
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      if [[ $f == *.lock ]] && [ -f "$P/series/$f" ] && [ ! -L "$P/series/$f" ]; then continue; fi
+      found="$found $(clean "$f" | tr " " _)"
+    done <<<"$entries"
   fi
   if [ -z "$found" ]; then emit C10 PASS "series_clean"
   else emit C10 FAIL "series_not_empty files=$(echo $found | tr ' ' ',') (generation spent or copied; reseal a NEW package dir and generation)"; fi
@@ -568,24 +586,50 @@ c10() {
 # KitPayloadSHA256=<h> must equal sha256 of the package's pf-kit-payload.tar.gz. Not overridable: a malformed or wrong
 # hash can never verify on the device.
 c11() {
-  local f bad="" want got="" mism="" n=0
-  local -a files=()
-  [ -d "$P/requests-sealed" ] && for f in "$P"/requests-sealed/*; do [ -f "$f" ] && files+=("$f"); done
-  [ -f "$P/BOOT_READY" ] && files+=("$P/BOOT_READY")
-  if [ ${#files[@]} -eq 0 ]; then emit C11 SKIP "no_sealed_requests_or_boot_ready"; return; fi
+  local f bad="" want got="" mism="" n=0 entries text unread=""
+  local -a files=() texts=()
+  # Fail closed (tsp-mc9m.41.1030.47.1): every requests-sealed entry, hidden ones included, must be a readable regular
+  # file, and an unreadable directory, entry or BOOT_READY is a FAIL, never an empty token set.
+  if [ -L "$P/requests-sealed" ] || { [ -e "$P/requests-sealed" ] && [ ! -d "$P/requests-sealed" ]; }; then
+    unread="$unread requests-sealed:not_directory"
+  elif [ -d "$P/requests-sealed" ]; then
+    if entries=$(find "$P/requests-sealed" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null) \
+        && [ -r "$P/requests-sealed" ] && [ -x "$P/requests-sealed" ]; then
+      while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        if [ -f "$P/requests-sealed/$f" ] && [ ! -L "$P/requests-sealed/$f" ]; then files+=("$P/requests-sealed/$f")
+        else unread="$unread $(clean "$f" | tr " " _):not_regular_file"; fi
+      done <<<"$entries"
+    else unread="$unread requests-sealed:unreadable"; fi
+  fi
+  if [ -L "$P/BOOT_READY" ] || [ -e "$P/BOOT_READY" ]; then
+    if [ -f "$P/BOOT_READY" ] && [ ! -L "$P/BOOT_READY" ]; then files+=("$P/BOOT_READY")
+    else unread="$unread BOOT_READY:not_regular_file"; fi
+  fi
+  if [ ${#files[@]} -eq 0 ] && [ -z "$unread" ]; then emit C11 SKIP "no_sealed_requests_or_boot_ready"; return; fi
   for f in "${files[@]}"; do
+    if text=$(cat -- "$f" 2>/dev/null); then texts+=("$text")
+    else texts+=(""); unread="$unread ${f##*/}:unreadable"; fi
+  done
+  local i
+  for i in "${!files[@]}"; do
+    f=${files[$i]}
     while read -r tok; do
+      [ -n "$tok" ] || continue
       n=$((n+1)); [ ${#tok} -eq 64 ] || bad="$bad ${f##*/}:${tok:0:12}(len=${#tok})"
-    done < <(grep -oE '(^|[^0-9A-Za-z])[0-9a-fA-F]{41,}([^0-9A-Za-z]|$)' "$f" | grep -oE '[0-9a-fA-F]{41,}')
+    done < <(printf '%s\n' "${texts[$i]}" | grep -oE '(^|[^0-9A-Za-z])[0-9a-fA-F]{41,}([^0-9A-Za-z]|$)' | grep -oE '[0-9a-fA-F]{41,}')
   done
   [ -f "$P/pf-kit-payload.tar.gz" ] && got=$(sha256sum < "$P/pf-kit-payload.tar.gz" | cut -c1-64)
-  for f in "${files[@]}"; do
+  for i in "${!files[@]}"; do
+    f=${files[$i]}
     while read -r want; do
+      [ -n "$want" ] || continue
       if [ -z "$got" ]; then mism="$mism ${f##*/}:payload_missing"
       elif [ "${want,,}" != "$got" ]; then mism="$mism ${f##*/}:want=${want:0:12}(len=${#want})"; fi
-    done < <(grep -oE '(expected_payload|KitPayloadSHA256)[=:" ]+[0-9a-fA-F]+' "$f" | grep -oE '[0-9a-fA-F]+$')
+    done < <(printf '%s\n' "${texts[$i]}" | grep -oE '(expected_payload|KitPayloadSHA256)[=:" ]+[0-9a-fA-F]+' | grep -oE '[0-9a-fA-F]+$')
   done
   local why=()
+  [ -n "$unread" ] && why+=("sealed_input_unreadable inputs=$(echo $unread | tr ' ' ',')")
   [ -n "$bad" ] && why+=("sealed_hash_malformed tokens=$(echo $bad | tr ' ' ',')")
   [ -n "$mism" ] && why+=("payload_hash_mismatch payload=${got:0:12} refs=$(echo $mism | tr ' ' ',')")
   if [ ${#why[@]} -eq 0 ]; then emit C11 PASS "hashes_ok tokens=$n payload=${got:0:12}"
