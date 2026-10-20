@@ -530,6 +530,23 @@ except Exception as e:
   else emit C8 FAIL "resume_seal_invalid base_kit=$bkd $(clean "$out")"; fi
 }
 
+# Bounded metadata reads for C9-C11 (recovery#19 review): real packages carry <=83 series entries, <=73 sealed
+# requests of <=4 KiB and a BOOT_READY of ~2 KiB, so these limits only ever refuse a corrupt or hostile package.
+KP_MAX_ENTRIES=${KP_MAX_ENTRIES:-1024}; KP_MAX_INPUT_BYTES=${KP_MAX_INPUT_BYTES:-1048576}
+KP_MAX_TOTAL_BYTES=${KP_MAX_TOTAL_BYTES:-16777216}; KP_MAX_FLOOR_BYTES=${KP_MAX_FLOOR_BYTES:-65536}
+# list_entries <dir>: print at most KP_MAX_ENTRIES+1 entry names (hidden and dangling included), then "rc=<find rc>".
+# find killed by SIGPIPE (141) means the listing was cut at the limit, not a read error.
+list_entries() {
+  find "$1" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | head -n "$((KP_MAX_ENTRIES + 1))"
+  echo "rc=${PIPESTATUS[0]}"
+}
+# entries_ok <listing>: the find status was clean (or cut at the limit); sets ENTRY_NAMES and ENTRY_COUNT.
+entries_ok() {
+  local rc=${1##*rc=}
+  ENTRY_NAMES=${1%rc=*}; ENTRY_COUNT=$(printf '%s' "$ENTRY_NAMES" | grep -c .)
+  [ "$rc" = 0 ] || [ "$rc" = 141 ]
+}
+
 # ---------------------------------------------------------------- C9 automation floor (window checkout compatibility)
 # 2026-10-19 gpu-14 (drc 2dccce87, tsp-mc9m.41.1018.12.42.1): the runner checks a window out at the package's
 # AutomationSHA and runs every step/close session from it. A pin older than the runner's request schema refused step 1
@@ -544,6 +561,9 @@ c9() {
   [ -f "$fl" ] || { emit C9 FAIL "floor_file_missing $fl"; return; }
   # Fail closed (tsp-mc9m.41.1030.47.1): an unreadable floor, a malformed entry or a floor with no entries never passes.
   local floor line n=0 bad=""
+  [ -r "$fl" ] || { emit C9 FAIL "floor_file_unreadable $fl"; return; }
+  [ "$(stat -c %s -- "$fl" 2>/dev/null || echo -1)" -ge 0 ] && [ "$(stat -c %s -- "$fl")" -le "$KP_MAX_FLOOR_BYTES" ] \
+    || { emit C9 FAIL "floor_file_too_large_or_unstatable $fl limit=$KP_MAX_FLOOR_BYTES"; return; }
   floor=$(cat -- "$fl" 2>/dev/null) || { emit C9 FAIL "floor_file_unreadable $fl"; return; }
   git -C "$D" cat-file -e "$a^{commit}" 2>/dev/null || { emit C9 FAIL "automation_sha_unreachable_in_runner sha=${a:0:12} runner=$(basename "$D")"; return; }
   while IFS= read -r line || [ -n "$line" ]; do
@@ -568,8 +588,12 @@ c10() {
     emit C10 FAIL "series_not_directory (reseal a NEW package dir and generation)"; return
   fi
   if [ -d "$P/series" ]; then
-    entries=$(find "$P/series" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null) && [ -r "$P/series" ] && [ -x "$P/series" ] \
+    entries=$(list_entries "$P/series")
+    entries_ok "$entries" && [ -r "$P/series" ] && [ -x "$P/series" ] \
       || { emit C10 FAIL "series_unreadable (reseal a NEW package dir and generation)"; return; }
+    [ "$ENTRY_COUNT" -le "$KP_MAX_ENTRIES" ] \
+      || { emit C10 FAIL "series_not_empty files=over_${KP_MAX_ENTRIES}_entries (generation spent or copied; reseal a NEW package dir and generation)"; return; }
+    entries=$ENTRY_NAMES
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       if [[ $f == *.lock ]] && [ -f "$P/series/$f" ] && [ ! -L "$P/series/$f" ]; then continue; fi
@@ -587,46 +611,49 @@ c10() {
 # hash can never verify on the device.
 c11() {
   local f bad="" want got="" mism="" n=0 entries text unread=""
-  local -a files=() texts=()
+  local -a files=()
   # Fail closed (tsp-mc9m.41.1030.47.1): every requests-sealed entry, hidden ones included, must be a readable regular
   # file, and an unreadable directory, entry or BOOT_READY is a FAIL, never an empty token set.
   if [ -L "$P/requests-sealed" ] || { [ -e "$P/requests-sealed" ] && [ ! -d "$P/requests-sealed" ]; }; then
     unread="$unread requests-sealed:not_directory"
   elif [ -d "$P/requests-sealed" ]; then
-    if entries=$(find "$P/requests-sealed" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null) \
-        && [ -r "$P/requests-sealed" ] && [ -x "$P/requests-sealed" ]; then
+    entries=$(list_entries "$P/requests-sealed")
+    if ! { entries_ok "$entries" && [ -r "$P/requests-sealed" ] && [ -x "$P/requests-sealed" ]; }; then
+      unread="$unread requests-sealed:unreadable"
+    elif [ "$ENTRY_COUNT" -gt "$KP_MAX_ENTRIES" ]; then
+      unread="$unread requests-sealed:over_${KP_MAX_ENTRIES}_entries"
+    else
+      entries=$ENTRY_NAMES
       while IFS= read -r f; do
         [ -n "$f" ] || continue
         if [ -f "$P/requests-sealed/$f" ] && [ ! -L "$P/requests-sealed/$f" ]; then files+=("$P/requests-sealed/$f")
         else unread="$unread $(clean "$f" | tr " " _):not_regular_file"; fi
       done <<<"$entries"
-    else unread="$unread requests-sealed:unreadable"; fi
+    fi
   fi
   if [ -L "$P/BOOT_READY" ] || [ -e "$P/BOOT_READY" ]; then
     if [ -f "$P/BOOT_READY" ] && [ ! -L "$P/BOOT_READY" ]; then files+=("$P/BOOT_READY")
     else unread="$unread BOOT_READY:not_regular_file"; fi
   fi
   if [ ${#files[@]} -eq 0 ] && [ -z "$unread" ]; then emit C11 SKIP "no_sealed_requests_or_boot_ready"; return; fi
+  # One input in memory at a time, each and all of them size-capped before reading.
+  [ -f "$P/pf-kit-payload.tar.gz" ] && got=$(sha256sum < "$P/pf-kit-payload.tar.gz" | cut -c1-64)
+  local size total=0
   for f in "${files[@]}"; do
-    if text=$(cat -- "$f" 2>/dev/null); then texts+=("$text")
-    else texts+=(""); unread="$unread ${f##*/}:unreadable"; fi
-  done
-  local i
-  for i in "${!files[@]}"; do
-    f=${files[$i]}
+    size=$(stat -c %s -- "$f" 2>/dev/null) || { unread="$unread ${f##*/}:unreadable"; continue; }
+    if [ "$size" -gt "$KP_MAX_INPUT_BYTES" ]; then unread="$unread ${f##*/}:over_${KP_MAX_INPUT_BYTES}_bytes"; continue; fi
+    total=$((total + size))
+    if [ "$total" -gt "$KP_MAX_TOTAL_BYTES" ]; then unread="$unread inputs:over_${KP_MAX_TOTAL_BYTES}_bytes_total"; break; fi
+    text=$(cat -- "$f" 2>/dev/null) || { unread="$unread ${f##*/}:unreadable"; continue; }
     while read -r tok; do
       [ -n "$tok" ] || continue
       n=$((n+1)); [ ${#tok} -eq 64 ] || bad="$bad ${f##*/}:${tok:0:12}(len=${#tok})"
-    done < <(printf '%s\n' "${texts[$i]}" | grep -oE '(^|[^0-9A-Za-z])[0-9a-fA-F]{41,}([^0-9A-Za-z]|$)' | grep -oE '[0-9a-fA-F]{41,}')
-  done
-  [ -f "$P/pf-kit-payload.tar.gz" ] && got=$(sha256sum < "$P/pf-kit-payload.tar.gz" | cut -c1-64)
-  for i in "${!files[@]}"; do
-    f=${files[$i]}
+    done < <(printf '%s\n' "$text" | grep -oE '(^|[^0-9A-Za-z])[0-9a-fA-F]{41,}([^0-9A-Za-z]|$)' | grep -oE '[0-9a-fA-F]{41,}')
     while read -r want; do
       [ -n "$want" ] || continue
       if [ -z "$got" ]; then mism="$mism ${f##*/}:payload_missing"
       elif [ "${want,,}" != "$got" ]; then mism="$mism ${f##*/}:want=${want:0:12}(len=${#want})"; fi
-    done < <(printf '%s\n' "${texts[$i]}" | grep -oE '(expected_payload|KitPayloadSHA256)[=:" ]+[0-9a-fA-F]+' | grep -oE '[0-9a-fA-F]+$')
+    done < <(printf '%s\n' "$text" | grep -oE '(expected_payload|KitPayloadSHA256)[=:" ]+[0-9a-fA-F]+' | grep -oE '[0-9a-fA-F]+$')
   done
   local why=()
   [ -n "$unread" ] && why+=("sealed_input_unreadable inputs=$(echo $unread | tr ' ' ',')")

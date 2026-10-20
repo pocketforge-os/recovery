@@ -109,5 +109,21 @@ expect C11 c11_boot_ready_checked FAIL "sealed_hash_malformed tokens=BOOT_READY"
 pkg c11_none
 expect C11 c11_nothing_sealed_skips SKIP "no_sealed_requests_or_boot_ready"
 
+# ---------------------------------------------------------------- bounded reads (review of 265331b7)
+printf '# %s\n%s reason_a\n' "$(printf 'x%.0s' $(seq 80))" "$A" > "$FL"; pkg c9_big
+KP_MAX_FLOOR_BYTES=64 expect C9 c9_oversized_floor_fails FAIL "floor_file_too_large_or_unstatable"
+expect C9 c9_floor_under_default_limit_passes PASS "contains_floor=1"
+printf '%s reason_a\n' "$A" > "$FL"
+pkg c10_many; for i in 1 2 3 4 5; do : > "$PK/series/w$i.lock"; done
+KP_MAX_ENTRIES=5 expect C10 c10_at_entry_limit_passes PASS "series_clean"
+KP_MAX_ENTRIES=4 expect C10 c10_over_entry_limit_fails FAIL "files=over_4_entries"
+pkg c11_many; for i in 1 2 3 4 5; do sealed "sequence-0$i.json" "$H64"; done
+KP_MAX_ENTRIES=5 expect C11 c11_at_entry_limit_passes PASS "hashes_ok tokens=5"
+KP_MAX_ENTRIES=4 expect C11 c11_over_entry_limit_fails FAIL "requests-sealed:over_4_entries"
+pkg c11_big; sealed sequence-01.json "$H64"; printf '{"pad":"%s"}\n' "$(printf 'x%.0s' $(seq 300))" > "$PK/requests-sealed/sequence-02.json"
+KP_MAX_INPUT_BYTES=200 expect C11 c11_oversized_input_fails FAIL "sequence-02.json:over_200_bytes"
+KP_MAX_TOTAL_BYTES=300 expect C11 c11_total_limit_fails FAIL "inputs:over_300_bytes_total"
+expect C11 c11_inputs_under_default_limits_pass PASS "hashes_ok tokens=1"
+
 echo "kit-preflight-fail-closed-test: pass=$pass fail=$fail"
 [ "$fail" -eq 0 ]
