@@ -65,7 +65,8 @@ class StubTool(Base):
         self.stub(self.OK)
         write_status(self.status, 60)
         render.render_runner_fleet()
-        argv = json.load(open(self.argv_file))
+        with open(self.argv_file) as f:
+            argv = json.load(f)
         self.assertEqual(argv[:1], ["board"])
         self.assertEqual(argv[argv.index("--status") + 1], self.status)
 
