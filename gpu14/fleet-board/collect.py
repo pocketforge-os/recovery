@@ -227,7 +227,30 @@ def age_s(d):
     return max(0.0, (NOW - d).total_seconds())
 
 
+# 2026-10-20 (tsp-mc9m.41.1030.55/.58): a dry run once fed fixture bead data through a `bd` stub on PATH; the stub fell
+# through to the installed bd shim, which took the stub for the real bd, and the pair forked 114k processes. Fixture
+# bead data comes in through this override instead: FB_BD_FIXTURE_DIR holds list.json (`bd list --all --json`),
+# ready.json (`bd ready --json`) and comments/<id>.json (`bd comments <id> --json`). With it set, no bd is executed;
+# a missing file is a source error.
+BD_FIXTURE = os.environ.get("FB_BD_FIXTURE_DIR")
+
+
+def bd_fixture(cmd):
+    rel = {"list": "list.json", "ready": "ready.json"}.get(cmd[1] if len(cmd) > 1 else "")
+    if len(cmd) > 2 and cmd[1] == "comments" and re.fullmatch(r"[A-Za-z0-9._-]+", cmd[2]):
+        rel = os.path.join("comments", cmd[2] + ".json")
+    if not rel:
+        return 127, "", f"FB_BD_FIXTURE_DIR: no fixture for {' '.join(cmd[:3])}"
+    try:
+        with open(os.path.join(BD_FIXTURE, rel)) as f:
+            return 0, f.read(), ""
+    except OSError as ex:
+        return 127, "", f"FB_BD_FIXTURE_DIR: {ex}"
+
+
 def run_cmd(cmd, timeout, cwd=None, env=None):
+    if BD_FIXTURE and cmd and cmd[0] == "bd":
+        return bd_fixture(cmd)
     e = dict(os.environ)
     if env:
         e.update(env)

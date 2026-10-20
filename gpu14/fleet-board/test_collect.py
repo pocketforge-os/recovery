@@ -6,6 +6,7 @@ No network, no bd/gh/pf-task: the module is imported against an empty fixture gp
 Run: python3 -B gpu14/fleet-board/test_collect.py
 """
 import datetime as dt
+import json
 import os
 import sys
 import tempfile
@@ -17,6 +18,7 @@ os.makedirs(os.path.join(_TMP, "fleet-board"), exist_ok=True)
 os.environ["FB_GPU14_DIR"] = _TMP
 os.environ["FB_BOARD_DIR"] = os.path.join(_TMP, "fleet-board")
 os.environ["FB_OWNER_ASKS"] = os.path.join(_TMP, "owner-questions.md")
+os.environ["FB_BD_FIXTURE_DIR"] = os.path.join(_TMP, "no-bd")   # any stray bd call is a source error, never a bd exec
 sys.path.insert(0, _HERE)
 import collect  # noqa: E402
 import render  # noqa: E402
@@ -257,6 +259,41 @@ class OwnerAttribution(unittest.TestCase):
     def test_other_assignees_keep_todays_behavior(self):
         res = self.run_beads(self.fixture("t"))
         self.assertEqual(res[5], [])
+
+
+class BdFixtureOverride(unittest.TestCase):
+    """FB_BD_FIXTURE_DIR serves bead JSON from files and never executes bd (no PATH stubs: tsp-mc9m.41.1030.58)."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="fb-bd-fixture-", dir=_TMP)
+        os.makedirs(os.path.join(self.dir, "comments"))
+        rows = [{"id": "tsp-mc9m.41.1030.28", "title": "x", "status": "in_progress", "assignee": "proc-coord",
+                 "issue_type": "task", "updated_at": iso(NOW)}]
+        with open(os.path.join(self.dir, "list.json"), "w") as f:
+            json.dump(rows, f)
+        with open(os.path.join(self.dir, "ready.json"), "w") as f:
+            json.dump([], f)
+        with open(os.path.join(self.dir, "comments", "tsp-mc9m.41.1030.28.json"), "w") as f:
+            json.dump([{"created_at": "2026-10-20T01:02:03Z"}], f)
+        self.saved = collect.BD_FIXTURE
+        collect.BD_FIXTURE = self.dir
+
+    def tearDown(self):
+        collect.BD_FIXTURE = self.saved
+
+    def test_beads_and_comments_come_from_files(self):
+        index, ready = collect.collect_beads()
+        self.assertEqual(index["tsp-mc9m.41.1030.28"]["assignee"], "proc-coord")
+        self.assertEqual(ready, [])
+        bid, info, errtxt = collect.fetch_comments("tsp-mc9m.41.1030.28")
+        self.assertEqual((info, errtxt), ({"count": 1, "last": "2026-10-20T01:02:03Z"}, None))
+
+    def test_missing_fixture_is_an_error_not_a_bd_call(self):
+        rc, out, errtxt = collect.run_cmd(["bd", "comments", "tsp-none", "--json"], 5)
+        self.assertEqual(rc, 127)
+        self.assertIn("FB_BD_FIXTURE_DIR", errtxt)
+        rc, _, errtxt = collect.run_cmd(["bd", "show", "x"], 5)
+        self.assertEqual(rc, 127)
 
 
 class RenderGroups(unittest.TestCase):
