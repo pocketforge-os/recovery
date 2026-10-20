@@ -111,6 +111,14 @@ class StubTool(Base):
         self.assertEqual(level, "stale")
         self.assertIn("unavailable", body)
 
+    def test_nonzero_exit_with_valid_result_is_stale(self):
+        for lvl in ("ok", "ALARM"):
+            self.stub(json.dumps({"level": lvl, "count": 0, "note": "n", "body": "<p>b</p>"}), rc=1)
+            write_status(self.status, 60)
+            body, count, level, note = render.render_runner_fleet()
+            self.assertEqual(level, "stale", lvl)
+            self.assertIn("unavailable", body)
+
     def test_missing_tool_is_stale(self):
         render.RUNNER_FLEET_TOOL = os.path.join(self.dir, "no-such-tool.py")
         write_status(self.status, 60)

@@ -764,6 +764,8 @@ def render_runner_fleet():
     try:
         r = subprocess.run([sys.executable, RUNNER_FLEET_TOOL, "board", "--status", RUNNER_FLEET_STATUS],
                            capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:   # a failed tool is never a fresh result, whatever it printed (review 5589706893)
+            raise RuntimeError(f"tool exit {r.returncode}")
         out = json.loads(r.stdout)
         body, count, level, note = out["body"], out["count"], out["level"], out["note"]
     except Exception as exc:
