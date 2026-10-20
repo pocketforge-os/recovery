@@ -98,6 +98,11 @@ c1() {
   if [ -e "$WIN/$G" ] || [ -e "$WIN/boot-open-$G.json" ] || [ -e "$WIN/boot-open-$G.failed.json" ]; then
     why+=("generation_consumed")
   fi
+  # 2026-10-20 (glesproof 174e1dbd): a package assembled from a used one carried lane-ssh/ and sealed it in
+  # ARTIFACT-SHA256SUMS; network-ready refused lane_ssh_bundle_exists only after a full FEL boot (window lost).
+  # lane-ssh/ is runtime output of network-ready: it must not exist before the window, on disk or in the manifest.
+  if [ -e "$P/lane-ssh" ] || [ -L "$P/lane-ssh" ] || compgen -G "$P/.lane-ssh-new-*" >/dev/null; then why+=("lane_ssh_preexists"); fi
+  grep -qE '^[0-9a-f]{64} [ *]?(\./)?(lane-ssh/|\.lane-ssh-new)' "$P/ARTIFACT-SHA256SUMS" 2>/dev/null && why+=("lane_ssh_sealed_in_manifest")
   if [ -f "$P/STAGE.py" ]; then fmt=stagepy
   elif jq -e '.FelBootRequest=="@STAGE_FROM_SEED_KIT@"' "$P/boot-open-request.template.json" >/dev/null 2>&1; then fmt=native
   else fmt=unknown; why+=("unknown_package_format"); fi

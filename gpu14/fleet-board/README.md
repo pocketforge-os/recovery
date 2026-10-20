@@ -23,6 +23,7 @@ outside this refresh's pf-task budget shows its last known state with its age.
 | Source | How | Bound |
 |---|---|---|
 | Beads | `bd list --all --json --flat -n 0` (one call), `bd ready --json -n 0`, `bd comments <id> --json` for stale candidates only | COMMENTS_MAX=150, 4 parallel |
+| Hardware rows | `hardware-rows.json` (committed rows); `bd comments <id> --json` for each anchor bead whose `comment_count` moved since `cache/hw-comments.json`; `lane-queue/*.txt` and `*.done`; queued `window-queue.tsv` kit packages (`cache/hw-kits.json`) | 4 parallel, HW_COMMENTS_BUDGET_S=45 per refresh; kit reads HW_KITS_BUDGET_S=5 |
 | Lanes | `/home/matt/recovery/gpu14/<lane>-drive.log` touched in the last LANE_LOG_WINDOW_H; `ps` for live `lane-drive.sh pft-...`; `admission-*.json` for run -> bead/model; `pf-task run.status` per run id | sequential, PFTASK_TIMEOUT_S each, PFTASK_BUDGET_S total; never the pf-task journal/DB |
 | PRs | `gh pr view <n> -R <repo> --json state,mergedAt,headRefOid,statusCheckRollup,reviewDecision,...` for PRs named in lane status lines | GH_PARALLEL=4 |
 | Device | `queue.tsv`, `queue.done`, `device-queue.txt`, `ps` for `queue-runner.sh` and a live `direct-boot.sh` | files only |
@@ -34,6 +35,88 @@ their bead; a lane with a `released` run is hidden (count in the Lanes footer).
 pf-task lookups are ordered no-driver first, never-checked first, newest status
 first, so the lanes most likely to be real handbacks are checked first and the
 rest round-robin across refreshes.
+
+## Hardware rows
+
+The "Hardware & drivers" section (after "Needs gpu-14 now") has one row per hardware block and
+then a "Tier priorities" table. The rows come from the committed `hardware-rows.json`:
+
+- `rows`: one entry per block. Fields: `id` (stable, e.g. `wifi`, `gpu`), `name`, `subsystem`,
+  `scope`, `driver` and `driver_source` (a summary of `inventory_driver_config`; read the pinned
+  defconfig and DT before you state a driver fact elsewhere), `anchor` (bead ids; the first is the
+  primary), and the seed fields `seed_state`, `seed_at` (`2026-10-18`) and `seed_evidence`.
+- `goals`: the owner's priorities: tier 1 Steam Link, Linux 7 with all drivers, OpenGL ES 3.2 via
+  Zink; tier 2 QEMU; plus deferred or later work. Each has an `anchor` goal bead.
+- `priorities`: the First Functional Build rows (with their 10-18 bead links), plus the GLES 3.2
+  CTS row. Each names its `goal`.
+
+To add or re-anchor a row, edit `hardware-rows.json`. Never edit `seed_*` to report progress.
+Report progress with an `HW_ROW` comment instead.
+
+For each row, `collect.py` computes the anchor beads' status and the open (not closed)
+descendants: the count, plus the top 3 by priority. Descendants follow the parent field and the
+dotted id. It also computes the last activity (bead updates, closes and anchor comments) and the
+lanes. A lane counts when it is live (not released, not kept as evidence) and its admitted bead,
+or its latest `lane-queue/<lane>.done` pop for its run, is the anchor or a descendant. Queued
+`lane-queue/<lane>.txt` lines are listed separately.
+
+A queued device kit also covers a row. A kit is any non-comment `window-queue.tsv` row (its
+position counts from 1 = next) or `window-queue.active`. The kit covers the row in three cases:
+
+- **Package:** the package names the anchor or a descendant. That means its own path
+  (`…/recovery/<bead>/…`) or a bare bead id in `OPERATOR.md`, `PREFLIGHT`,
+  `requests-sealed/*.json` or `seed-kit/*`. Ids inside other paths, such as `~/wt/<bead>/…`
+  tool checkouts or another bead's image, are ignored. Reads are cached in
+  `cache/hw-kits.json` by the package's mtimes and capped at HW_KITS_BUDGET_S (5 s).
+- **Comment:** the anchor's own comments name the kit: its package path, the same kit family
+  (same parent dir, basename equal once a `-rN`/`-gN`/`-vN` suffix is dropped), or its 32-hex
+  generation. This is how a batched pack covers the beads it carries:
+  `…/peripherals-first-functional-M8-r5` in a LEDs comment matches the queued `…-M8-r8`.
+- **Batch:** the anchor has a `batch:<slug>` label, and another bead with the same label is
+  driven by a live lane or named by a kit package.
+
+The Lane column shows a kit as `periph-g2 (kit 2ae0453e, queued #4)`. `in window now` means
+active, and `· via comment` or `· via batch:<slug>` gives the rule. Hover a kit for its package.
+Then the collector sets the state and these flags:
+
+- `unowned`: the state is not Working, HW-limit, Parked or Deferred, and no lane, queue line,
+  kit or batch covers the row.
+- `evidence old`: the evidence is older than HW_EVIDENCE_OLD_D (7 days).
+- `anchor closed`: every anchor bead is closed, but the row is not Working. Post a fresh HW_ROW.
+- `no anchor`: the row has no anchor bead yet.
+
+### Posting row evidence (lanes)
+
+The state is the latest valid `HW_ROW` line in a comment on any of the row's anchor beads. Put it
+on its own line:
+
+```
+cd /home/matt/mission-control && bd comment tsp-mc9m.60.29.17 --stdin <<'EOF'
+HW_ROW state=Working build=21 evidence=cedrus decodes pinned clip e77bfbb1 via v4l2slh264dec, no software fallback (window a54b244c)
+EOF
+```
+
+- `state` is one of Working, Partial, Detected, Broken, Untested, Parked, HW-limit or Deferred
+  (case-insensitive). A line with any other state is ignored.
+- `build` is the full-image build number the evidence was taken on.
+- `evidence=` takes the rest of the line (up to 600 characters). Name the receipt: the window,
+  the image SHA256 or the log path.
+- When one bead anchors several rows (for example, `tsp-mc9m.60.29.29` anchors both the cold boot
+  row and the Steam Link game audio row), add `row=<row id>` before `evidence=`. The line then
+  sets only that row. Without `row=`, the line sets every row anchored on that bead.
+
+A row with no `HW_ROW` line shows its seed, marked "seed 10-18". Anchor comments are re-read only
+when the bead's `comment_count` changes (`cache/hw-comments.json`), so a new comment shows on
+the next refresh.
+
+## Open backlog
+
+"Stale in-progress beads" (formerly "Stale beads") is unchanged. "Open backlog" counts every bead
+with status `open`, in all scopes. It shows an age bucket (from `created_at`: under 1 day, 1–3,
+3–7, 7–14 and over 14 days) for each area, where the area is the id cut to two segments (for
+example `tsp-mc9m.41`). It shows the top BACKLOG_AREAS_SHOW areas, then one "other" row, plus P0
+and P1 counts. Batches group beads by any `batch:<slug>` bd label, with counts for every status
+and the top 3 beads that are not closed.
 
 ## Classification
 

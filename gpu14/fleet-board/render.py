@@ -419,6 +419,184 @@ def render_owner(d):
         f'<li data-filter="{e(i["title"])}"><span class="asknum">Q{i["num"]}</span> {e(i["title"])}</li>' for i in o["items"]) + "</ol>"
 
 
+# 2026-10-20 (gpu-14): hardware & driver rows, tier priorities, open backlog (collect.py build_hardware/collect_backlog).
+HW_STATE_ORDER = ("Working", "Partial", "Detected", "Broken", "Untested", "Parked", "HW-limit", "Deferred")
+HW_STATE_SEV = {"Working": "good", "Partial": "warn", "Detected": "info", "Broken": "crit", "Untested": "warn",
+                "Parked": "muted", "HW-limit": "muted", "Deferred": "muted"}
+BEAD_STATUS_SEV = {"closed": "good", "in_progress": "info", "open": "muted", "blocked": "warn", "deferred": "muted",
+                   "missing": "crit"}
+HW_FLAG = {"unowned": ("unowned", "crit", "not Working/HW-limit/Parked/Deferred and no lane, lane-queue entry, queued kit or batch mate covers it"),
+           "no_anchor": ("no anchor", "crit", "no anchor bead: file one and add it to hardware-rows.json"),
+           "anchor_closed": ("anchor closed", "warn", "every anchor bead is closed but the row is not Working: post an HW_ROW"),
+           "evidence_old": ("evidence old", "warn", "evidence older than the threshold: post a fresh HW_ROW")}
+LANES_SHOW = 3
+
+
+def hw_tally_line(tally, flags=None, seeded=None, total=None):
+    parts = [pill(f"{s} {tally[s]}", HW_STATE_SEV.get(s, "muted")) for s in HW_STATE_ORDER if tally.get(s)]
+    parts += [pill(f"{s} {n}", "muted") for s, n in tally.items() if n and s not in HW_STATE_ORDER]
+    for f, n in (flags or {}).items():
+        if n and f in HW_FLAG:
+            parts.append(chip(f"{HW_FLAG[f][0]} {n}", HW_FLAG[f][1]))
+    if seeded is not None and total:
+        parts.append(f'<span class="dim">{seeded} of {total} still on the 10-18 seed (no HW_ROW yet)</span>')
+    return '<p class="tally">' + " ".join(parts) + "</p>"
+
+
+def anchor_cell(r):
+    if not r.get("anchor_status"):
+        return chip("no anchor", "crit")
+    return " ".join(f'{mono(a["id"])} {chip(a["status"], BEAD_STATUS_SEV.get(a["status"], "muted"))}' for a in r["anchor_status"])
+
+
+def open_cell(r):
+    top = "".join(f'<li>{mono(b["id"])} {chip(b["status"], BEAD_STATUS_SEV.get(b["status"], "muted"))} '
+                  f'<span class="t">{"P" + str(b["priority"]) + " · " if b.get("priority") is not None else ""}{e((b.get("title") or "")[:70])}</span></li>'
+                  for b in r.get("open_top") or [])
+    more = r.get("open_count", 0) - len(r.get("open_top") or [])
+    return (f'<div class="sub">anchor {anchor_cell(r)}</div>'
+            f'<div><span class="count">{r.get("open_count", 0)}</span> <span class="dim">open under it</span></div>'
+            + (f'<ul class="toplist">{top}</ul>' if top else "")
+            + (f'<div class="sub">+{more} more</div>' if more > 0 else ""))
+
+
+def kit_line(k):
+    """periph-g2 (kit 2ae0453e, queued #4): a window-queue kit covering the row (collect.row_kits)."""
+    where = "in window now" if k.get("active") else f'queued #{k.get("position")}'
+    via = "" if k.get("via") == "package" else f' · via {k.get("via")}'
+    tip = (f'{k.get("label") or ""} {k.get("pkg") or ""}: '
+           + (f'the package names {k.get("bead")}' if k.get("via") == "package"
+              else f'{k.get("bead")} comments name this kit (path family or generation)' if k.get("via") == "comment"
+              else f'{k.get("bead")} shares {k.get("via")} and the package names it'))
+    return (f'<div title="{e(tip)}">{mono(k.get("lane"), "lane")} '
+            f'<span class="dim">(kit {e((k.get("gen") or "?")[:8])}, {e(where)}{e(via)})</span></div>')
+
+
+def lanes_cell(lanes, queued, kits=(), batch_lanes=()):
+    kit_lanes = {k.get("lane") for k in kits}
+    lanes = [l for l in lanes if l not in kit_lanes]   # a lane shown with its kit is not repeated
+    out = " ".join(mono(l, "lane") for l in lanes[:LANES_SHOW])
+    if len(lanes) > LANES_SHOW:
+        out += f' <span class="dim" title="{e(" ".join(lanes))}">+{len(lanes) - LANES_SHOW}</span>'
+    out += "".join(kit_line(k) for k in kits[:2])
+    if len(kits) > 2:
+        out += f'<div class="sub" title="{e(" ".join(k.get("lane") or "?" for k in kits[2:]))}">+{len(kits) - 2} more kits</div>'
+    if batch_lanes:
+        out += '<div class="sub">' + ", ".join(f'{e(x["lane"])} ({e(x["via"])}: {e(x["bead"])})' for x in batch_lanes[:2]) + "</div>"
+    if queued:
+        q = ", ".join(f'{e(x["lane"])} ({e(x["bead"])})' for x in queued[:2]) + (f" +{len(queued) - 2}" if len(queued) > 2 else "")
+        out += f'<div class="sub">queued: {q}</div>'
+    return out or '<span class="dim">–</span>'
+
+
+def hw_row_html(r, second):
+    st = r.get("state") or "?"
+    if r.get("state_source") == "hw_row":
+        src = f'HW_ROW {e(short_ts(r.get("evidence_at")))}' + (f' · {e(r.get("evidence_by"))}' if r.get("evidence_by") else "")
+    else:
+        src = f'seed {e((r.get("seed_at") or "")[5:10])}'
+    ev = r.get("evidence") or ""
+    build = f'build {e(r["build"])}' if r.get("build") else '<span class="dim">no build named</span>'
+    flags = " ".join(chip(HW_FLAG[f][0], HW_FLAG[f][1]).replace('<span ', f'<span title="{e(HW_FLAG[f][2])}" ', 1)
+                     for f in r.get("flags") or [] if f in HW_FLAG)
+    ff = " ".join(HW_FLAG[f][0] for f in r.get("flags") or [] if f in HW_FLAG)
+    return (f'<tr data-filter="{e(r.get("id"))} {e(r.get("name"))} {e(r.get("subsystem") or r.get("area"))} {e(st)} '
+            f'{e(" ".join(r.get("anchor") or []))} {e(" ".join(r.get("lanes") or []))} '
+            f'{e(" ".join(k.get("lane") or "" for k in r.get("kits") or []))} {e(ff)}">'
+            f'<td><strong>{e(r.get("name"))}</strong><div class="sub">'
+            + " · ".join(x for x in (e(r.get("subsystem") or ""), e(r.get("scope") or ""), mono(r.get("id"))) if x)
+            + '</div></td>'
+            f'<td>{second}</td>'
+            f'<td>{pill(st, HW_STATE_SEV.get(st, "muted"))}<div class="sub">{src}</div></td>'
+            f'<td class="evid"><span class="evtext"{(" title=" + chr(34) + e(ev[:600]) + chr(34)) if len(ev) > 180 else ""}>{e(ev[:180])}{"…" if len(ev) > 180 else ""}</span>'
+            f'<div class="sub">{build}</div></td>'
+            f'<td class="opencell">{open_cell(r)}</td>'
+            f'<td>{lanes_cell(r.get("lanes") or [], r.get("queued") or [], r.get("kits") or [], r.get("batch_lanes") or [])}</td>'
+            f'<td class="num">{e(short_ts(r.get("last_activity")))}<div class="sub">{e(fmt_age(r.get("last_activity_age_s")))} ago</div></td>'
+            f'<td>{flags or "<span class=dim>–</span>"}</td></tr>')
+
+
+def render_hardware(d):
+    hw = d.get("hardware") or {}
+    rows = hw.get("rows") or []
+    if not rows:
+        why = hw.get("error") or "no rows (see Sources and thresholds for errors)"
+        return f'<p class="empty">Hardware rows unavailable: {e(why)}</p>'
+    seeded = sum(1 for r in rows if r.get("state_source") == "seed")
+    head = ('<thead><tr><th>Block</th><th>{second}</th><th>State</th><th>Evidence · build</th><th>Open beads</th>'
+            '<th>Lane</th><th class="num">Last activity</th><th>Flags</th></tr></thead>')
+    body = "".join(hw_row_html(r, f'{e(r.get("driver") or "–")}<div class="sub">{chip(r.get("driver_source") or "?", "neutral")}</div>')
+                   for r in rows)
+    parts = [hw_tally_line(hw.get("tally") or {}, hw.get("flags"), seeded, len(rows)),
+             '<div class="scroll"><table class="grid hw">' + head.format(second="Driver · source") + "<tbody>" + body + "</tbody></table></div>"]
+    pr = d.get("priorities") or {}
+    goals = pr.get("goals") or []
+    if goals:
+        parts.append(f'<h3>Tier priorities <span class="count">{sum(len(g.get("rows") or []) for g in goals)}</span></h3>')
+        parts.append(hw_tally_line(pr.get("tally") or {}, pr.get("flags")))
+        gb = []
+        for g in goals:
+            tier = f'Tier {g["tier"]}' if g.get("tier") else "Not tiered"
+            ga = (" · goal " + " ".join(f'{mono(a["id"])} {chip(a["status"], BEAD_STATUS_SEV.get(a["status"], "muted"))}'
+                                        for a in g.get("anchor_status") or [])) if g.get("anchor_status") else ""
+            gl = g.get("lanes") or []
+            gt = " ".join(pill(f"{s} {g['tally'][s]}", HW_STATE_SEV.get(s, "muted")) for s in HW_STATE_ORDER if (g.get("tally") or {}).get(s))
+            gb.append(f'<tr class="grp" data-filter="{e(g.get("id"))} {e(g.get("name"))} {e(tier)}"><td colspan="8">'
+                      f'<div class="grp-head"><span class="lbl">{e(tier)}</span><strong>{e(g.get("name"))}</strong>{ga}'
+                      f'<span class="dim">{g.get("open_count", 0)} open under goal · {len(gl)} lane{"s" if len(gl) != 1 else ""}</span> {gt}</div>'
+                      f'<div class="sub">{e(g.get("why") or "")}</div></td></tr>')
+            gb += [hw_row_html(r, e(r.get("area") or "–")) for r in g.get("rows") or []]
+        parts.append('<div class="scroll"><table class="grid hw">' + head.format(second="Area") + "<tbody>" + "".join(gb) + "</tbody></table></div>")
+    parts.append(f'<p class="fine">Rows: {mono(hw.get("source"))}. State = the latest <code>HW_ROW state=&lt;S&gt; build=&lt;N&gt; evidence=&lt;text&gt;</code> '
+                 f'comment on an anchor bead (optional <code>row=&lt;id&gt;</code>), else the 10-18 seed. Evidence old after '
+                 f'{e(hw.get("evidence_old_d"))} d. Lane = a live lane on the anchor or a descendant (admitted bead or its latest '
+                 f'lane-queue pop); queued = a lane-queue line; kit = a window-queue kit whose package names the anchor or a descendant, '
+                 f'or that the anchor\'s comments name (path family or generation), or a <code>batch:&lt;slug&gt;</code> mate\'s lane or kit '
+                 f'({e(hw.get("kits_scanned", 0))} queued kits checked). {e(hw.get("comments_fetched", 0))} anchor comment lists re-read this refresh.</p>')
+    return "".join(parts)
+
+
+def render_backlog(d):
+    b = d.get("backlog")
+    if not b:
+        return '<p class="empty">Backlog unavailable (bd list failed; see Sources and thresholds).</p>'
+    n = lambda v: f'{v:,}' if v else '<span class="dim">–</span>'
+    ot, p0, p1, old, na = b["open_total"], b["p0"], b["p1"], b["older_14d"], b["areas_total"]
+    parts = ['<p class="tally">' + " ".join([
+        pill(f"{ot:,} open", "info"), pill(f"P0 {p0}", "crit" if p0 else "muted"), pill(f"P1 {p1}", "warn" if p1 else "muted"),
+        chip(f"{old:,} older than 14 d", "warn" if old else "muted"), f'<span class="dim">{na:,} areas</span>']) + "</p>"]
+    hdr = "".join(f'<th class="num">{e(x)}</th>' for x in b["buckets"])
+    rows = "".join(f'<tr data-filter="{e(a["area"])}"><td>{mono(a["area"])}</td><td class="num">{n(a["total"])}</td>'
+                   f'<td class="num">{n(a["p0"])}</td><td class="num">{n(a["p1"])}</td>'
+                   + "".join(f'<td class="num">{n(c)}</td>' for c in a["counts"]) + "</tr>" for a in b["areas"])
+    o = b.get("other") or {}
+    if o.get("areas"):
+        rows += (f'<tr><td><span class="dim">{o["areas"]:,} other areas</span></td><td class="num">{n(o["total"])}</td>'
+                 f'<td class="num">{n(o["p0"])}</td><td class="num">{n(o["p1"])}</td>'
+                 + "".join(f'<td class="num">{n(c)}</td>' for c in o["counts"]) + "</tr>")
+    rows += (f'<tr class="tot"><td>All open</td><td class="num">{n(b["open_total"])}</td><td class="num">{n(b["p0"])}</td>'
+             f'<td class="num">{n(b["p1"])}</td>' + "".join(f'<td class="num">{n(c)}</td>' for c in b["totals"]) + "</tr>")
+    parts.append('<div class="scroll"><table class="grid backlog"><thead><tr><th>Area</th><th class="num">Open</th>'
+                 f'<th class="num">P0</th><th class="num">P1</th>{hdr}</tr></thead><tbody>{rows}</tbody></table></div>')
+    bt = b.get("batches") or []
+    parts.append(f'<h3>Batches <span class="count">{len(bt)}</span></h3>')
+    if not bt:
+        parts.append('<p class="empty">No batches labelled yet (bd label <code>batch:&lt;slug&gt;</code>).</p>')
+    else:
+        brow = "".join(
+            f'<tr data-filter="batch:{e(g["batch"])}"><td>{mono("batch:" + g["batch"])}</td><td class="num">{n(g["total"] - g["closed"])}</td>'
+            f'<td class="num">{n(g["open"])}</td><td class="num">{n(g["in_progress"])}</td><td class="num">{n(g["blocked"])}</td>'
+            f'<td class="num">{n(g["closed"])}</td><td><ul class="toplist">'
+            + "".join(f'<li>{mono(x["id"])} {chip(x["status"], BEAD_STATUS_SEV.get(x["status"], "muted"))} <span class="t">{e(x["title"][:70])}</span></li>' for x in g.get("top") or [])
+            + "</ul></td></tr>" for g in bt)
+        parts.append('<div class="scroll"><table class="grid"><thead><tr><th>Batch</th><th class="num">Not closed</th><th class="num">Open</th>'
+                     '<th class="num">In progress</th><th class="num">Blocked</th><th class="num">Closed</th><th>Top items</th></tr></thead>'
+                     f'<tbody>{brow}</tbody></table></div>')
+    parts.append('<p class="fine">Every bead with status open, all scopes (in_progress beads are in Lanes, Stale and Owned). '
+                 'Age from created_at; area = the id cut to two segments. Batches count every status.</p>')
+    return "".join(parts)
+
+
 def render_footer(d):
     th = d["thresholds"]
     errs = d.get("errors") or []
@@ -428,12 +606,13 @@ def render_footer(d):
                      + "".join(f'<li>{mono(x["source"])} <span class="raw">{e(x["error"])}</span></li>' for x in errs) + "</ul>")
     keys = ["LANE_LOG_WINDOW_H", "PFTASK_BUDGET_S", "PFTASK_TIMEOUT_S", "BUSY_IDLE_ALARM_MIN", "BUSY_NO_SIGNAL_ALARM_MIN",
             "HANDBACK_WITH_DRIVER_GRACE_MIN", "KIT_STUCK_H", "STALE_BEAD_H", "STALE_LOOKBACK_H", "NEWLY_UNBLOCKED_H",
-            "RESULTS_SHOW", "RESULTS_WINDOW_H", "NEXT_SHOW", "PARALLEL_SHOW", "CHAINS_SHOW"]
+            "RESULTS_SHOW", "RESULTS_WINDOW_H", "NEXT_SHOW", "PARALLEL_SHOW", "CHAINS_SHOW",
+            "HW_EVIDENCE_OLD_D", "HW_COMMENTS_BUDGET_S", "HW_KITS_BUDGET_S", "BACKLOG_AREAS_SHOW"]
     ths = " ".join(f'<span class="th"><span class="lbl">{e(k)}</span>{mono(th.get(k))}</span>' for k in keys if k in th)
     roots = " ".join(mono(r) for r in d.get("campaign_roots", []))
     parts.append(f'<p class="fine">Scope roots: {roots}</p>')
     parts.append(f'<p class="fine thresholds">Thresholds: {ths}</p>')
-    parts.append(f'<p class="fine">Sources: bd list --all / bd ready / bd comments (stale candidates only); lane drive logs + ps + admission files + pf-task run.status (primary-key lookups, sequential, budgeted); gh pr view for referenced PRs; window-queue.tsv / .done.tsv / .failed.tsv / .active / .pause / window-done (live queue) and queue.tsv / queue.done / device-queue.txt (legacy); gpu14-owner-questions.md. Collected on {e(d.get("host"))} in {e(d.get("runtime_s"))} s. Generated by /home/matt/recovery/gpu14/fleet-board/refresh.sh.</p>')
+    parts.append(f'<p class="fine">Sources: bd list --all / bd ready / bd comments (stale candidates, and hardware-row anchors when their comment count moves); hardware-rows.json and lane-queue/*.txt|.done; lane drive logs + ps + admission files + pf-task run.status (primary-key lookups, sequential, budgeted); gh pr view for referenced PRs; window-queue.tsv / .done.tsv / .failed.tsv / .active / .pause / window-done (live queue) and queue.tsv / queue.done / device-queue.txt (legacy); gpu14-owner-questions.md. Collected on {e(d.get("host"))} in {e(d.get("runtime_s"))} s. Generated by /home/matt/recovery/gpu14/fleet-board/refresh.sh.</p>')
     return "".join(parts)
 
 
@@ -620,6 +799,22 @@ tr[hidden] { display: none !important; }
 .vel { padding: 6px 8px; direction: rtl; }
 .vel svg { display: block; width: 100%; min-width: 600px; height: auto; direction: ltr; }
 .vel-wow { margin: 4px 0 6px; color: var(--ink-2); font-size: 13px; }
+
+/* hardware & drivers, tier priorities, open backlog (2026-10-20) */
+.tally { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 10px; }
+table.hw { min-width: 1280px; }
+table.hw td:nth-child(2) { max-width: 230px; }
+table.hw td.evid { min-width: 280px; max-width: 380px; }
+.evtext { color: var(--ink-2); font-size: 12.5px; line-height: 1.4; word-break: break-word; }
+table.hw td.opencell { min-width: 250px; max-width: 340px; }
+.toplist { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 3px; font-size: 12px; }
+.toplist li { line-height: 1.5; }
+.toplist .chip { padding: 2px 5px; font-size: 10px; }
+.opencell .sub .chip, .opencell .sub .id { font-size: 10px; }
+tr.grp td { background: var(--raised); border-top: 2px solid var(--rule); }
+.grp-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+table.backlog { min-width: 620px; }
+table.backlog tr.tot td { font-weight: 600; border-top: 2px solid var(--rule); background: var(--raised); }
 
 @media (max-width: 600px) {
   h1 { font-size: 19px; }
@@ -833,6 +1028,10 @@ def main():
     body.append(f'<section class="strip" aria-label="summary">{strip}</section>')
     body.append(section("needs", "Needs gpu-14 now", s["needs"], render_needs(d),
                         "prioritized: merge-ready, handbacks, boot-ready kits, device, blocked, stale, undriven, newly unblocked"))
+    hw = d.get("hardware")
+    if hw is not None:
+        body.append(section("hardware", "Hardware & drivers", len(hw.get("rows") or []), render_hardware(d),
+                            "one row per block, then the tier priorities · state from HW_ROW comments on the anchor bead, else the 10-18 seed"))
     for who, cnt in (s.get("owned") or {}).items():
         body.append(section(f"owned-{who}", f"Owned by {who}", cnt, render_owned(d, who),
                             f"in scope, no lane, assignee {who}: theirs to drive, not gpu-14 needs", open_=False))
@@ -851,8 +1050,12 @@ def main():
                         "bd ready in scope with no lane: parallel set, then what each landing unblocks"))
     body.append(section("device", "Device bench", wq_depth + dev["pending"], render_device(d),
                         "one A133 handheld, strictly serial: window-queue.sh over window-queue.tsv (legacy queue-runner.sh over queue.tsv)"))
-    body.append(section("stale", "Stale beads", s["stale"], render_stale(d),
+    body.append(section("stale", "Stale in-progress beads", s["stale"], render_stale(d),
                         f'in_progress, in scope, no lane, no update or comment for {th["STALE_BEAD_H"]} h', open_=bool(s["stale"])))
+    if "backlog" in d:
+        bl = d.get("backlog") or {}
+        body.append(section("backlog", "Open backlog", bl.get("open_total"), render_backlog(d),
+                            "status open, all scopes: age bucket × area, P0/P1, batch:<slug> labels", open_=False))
     body.append(section("owner", "Owner asks", s["owner_asks"], render_owner(d), "live items; defaults proceed without an answer", open_=False))
     body.append(section("about", "Sources and thresholds", len(d.get("errors") or []), render_footer(d),
                         "every number above comes from a live read; nothing is remembered between refreshes except released run ids",
