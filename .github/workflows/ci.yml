@@ -26,6 +26,7 @@ jobs:
         run: |
           python3 -B gpu14/fleet-board/test_collect.py
           python3 -B gpu14/fleet-board/test_install.py
+          python3 -B gpu14/fleet-board/test_render.py
       - name: gpu14 kit-preflight boot-open request controls
         run: bash gpu14/tests/kit-preflight-boot-open-test.sh
       - name: gpu14 kit-preflight C9/C10/C11 fail-closed controls
