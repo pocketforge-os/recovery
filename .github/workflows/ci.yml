@@ -22,8 +22,10 @@ jobs:
           python3 -B gpu14/lane_wtrm_test.py
           bash gpu14/tests/release-run-test.sh
           bash gpu14/tests/bd-close-safe-test.sh
-      - name: gpu14 fleet-board classification hermetic controls
-        run: python3 -B gpu14/fleet-board/test_collect.py
+      - name: gpu14 fleet-board classification and install hermetic controls
+        run: |
+          python3 -B gpu14/fleet-board/test_collect.py
+          python3 -B gpu14/fleet-board/test_install.py
       - name: gpu14 kit-preflight boot-open request controls
         run: bash gpu14/tests/kit-preflight-boot-open-test.sh
       - name: gpu14 kit-preflight C9/C10/C11 fail-closed controls

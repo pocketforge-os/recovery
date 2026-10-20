@@ -98,3 +98,16 @@ PARALLEL_SHOW 40, CHAINS_SHOW 30.
 
 ### Epic-wide waits (2026-10-12)
 A `waits.tsv` id ending in `.*` (for example `tsp-ihne1.*`) covers every descendant bead, which suits an owner-paused coordinator's epic. Among matching rows (exact or prefix), the freshest one wins, and the usual 24 h expiry still applies, so one row is refreshed daily rather than one per bead.
+
+## Deploy
+
+The live board dir and the `pf-fleet-board.service`/`.timer` user units (copies in `systemd/`) are deployed from
+a clean checkout of this repo, never hand-edited:
+
+```
+gpu14/fleet-board/install-fleet-board.sh --check   # typed fleet_board_drift lines; last line fleet_board_install=ok|drift
+gpu14/fleet-board/install-fleet-board.sh --apply   # install drifted files (.bak-<UTC> kept), daemon-reload, restart the timer
+```
+
+Only collect.py, render.py, refresh.sh, velocity.py and the two units are written; the board's data files are
+never touched. `FB_LIVE_DIR`, `FB_UNIT_DIR` and `SYSTEMCTL` redirect it (`test_install.py`).
