@@ -764,6 +764,22 @@ def render_runner_fleet():
                 0, "stale", "stale: renderer failed")
 
 
+def device_tile(dev):
+    """Device bench tile -> (severity, value, detail)."""
+    # 2026-10-19: the live queue is window-queue.sh; dev["pending"] is the retired queue.tsv count
+    wq_depth = dev.get("wq_depth") or 0
+    # 2026-10-20 (tsp-mc9m.41.1030.55.1): a paused/stopped queue still holding an active window is stopped too (depth
+    # is 0 once the only row was popped), and that active item must not turn the tile good.
+    wq_stopped = bool(wq_depth or dev.get("wq_active")) and (dev.get("wq_paused") or dev.get("wq_running") is False)
+    wq_loop = "paused" if dev.get("wq_paused") else ("running" if dev.get("wq_running") else ("off" if dev.get("wq_running") is False else "?"))
+    wq_act = f'window {dev["wq_active"][:8]} ({dev.get("wq_active_phase") or "?"})' if dev.get("wq_active") else None
+    dev_v = dev["running"] or wq_act or ("HALTED" if dev["halted"] else "idle")
+    dev_sev = "crit" if dev["halted"] or wq_stopped else ("good" if dev["running"] or wq_act else ("warn" if dev["pending"] and not dev["runner_alive"] else "info"))
+    dev_d = (f'{wq_depth} queued · {dev.get("wq_held") or 0} held · window queue {wq_loop}'
+             + (f' · legacy {dev["pending"]} queued' if dev["pending"] else ""))
+    return dev_sev, dev_v, dev_d
+
+
 def main():
     d = json.load(open(DATA))
     s = d["summary"]
@@ -772,15 +788,8 @@ def main():
     needs_sev = "crit" if s["needs"] else "good"
     nk = s.get("needs_by_kind") or {}
     kinds_txt = " · ".join(f"{KIND_LABEL.get(k, k).lower()} {v}" for k, v in nk.items() if v) or "nothing waiting"
-    # 2026-10-19: the live queue is window-queue.sh; dev["pending"] is the retired queue.tsv count
+    dev_sev, dev_v, dev_d = device_tile(dev)
     wq_depth = dev.get("wq_depth") or 0
-    wq_stopped = bool(wq_depth) and (dev.get("wq_paused") or dev.get("wq_running") is False)
-    wq_loop = "paused" if dev.get("wq_paused") else ("running" if dev.get("wq_running") else ("off" if dev.get("wq_running") is False else "?"))
-    wq_act = f'window {dev["wq_active"][:8]} ({dev.get("wq_active_phase") or "?"})' if dev.get("wq_active") else None
-    dev_v = dev["running"] or wq_act or ("HALTED" if dev["halted"] else "idle")
-    dev_sev = "crit" if dev["halted"] or wq_stopped else ("good" if dev["running"] or wq_act else ("warn" if dev["pending"] and not dev["runner_alive"] else "info"))
-    dev_d = (f'{wq_depth} queued · {dev.get("wq_held") or 0} held · window queue {wq_loop}'
-             + (f' · legacy {dev["pending"]} queued' if dev["pending"] else ""))
     tiles = [
         ("t-" + needs_sev, "Needs gpu-14", str(s["needs"]), kinds_txt, False),
         ("t-good" if s["lanes_running"] else "t-info", "Lanes running", str(s["lanes_running"]), f'of {s["lanes_total"]} live lanes · {s["lanes_needs"]} need gpu-14 · {s.get("lanes_unchecked", 0)} unchecked', False),

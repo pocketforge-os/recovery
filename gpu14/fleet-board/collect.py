@@ -1587,14 +1587,19 @@ def classify_device(dev):
     # 2026-10-19: lanes whose kit is queued in the window queue now wait instead of nagging boot_ready, so a stopped
     # queue must surface on its own or those lanes would wait on nothing.
     wq = dev.get("window_queue") or {}
-    if wq.get("depth") and (wq.get("paused") or wq.get("running") is False):
+    # 2026-10-20 (tsp-mc9m.41.1030.55.1, review 5588845556): window-queue.sh keeps .active and writes .pause when it
+    # stops after popping its only row, so depth is 0 while a window is unresolved; an active item alerts too.
+    wq_act = wq.get("active") or None
+    if (wq.get("depth") or wq_act) and (wq.get("paused") or wq.get("running") is False):
         why = f"PAUSED ({wq.get('pause_line') or 'pause file'})" if wq.get("paused") else "not running"
         nxt = ("Diagnose the STOP (needs/window-queue-stop-*.txt), then window-queue.sh --resume complete|incomplete "
                "and restart it (run_in_background)." if wq.get("paused") else
                "Start window-queue.sh (run_in_background); check window-queue.sh --status first.")
         since = wq.get("pause_at") if wq.get("paused") else None
         needs.append({"kind": "device", "id": "window-queue", "lane": None, "bead": None, "run": None, "pr": None,
-                      "reason": f"window queue {why[:160]} with {wq['depth']} rows pending", "since": since,
+                      "reason": f"window queue {why[:160]} with {wq.get('depth') or 0} rows pending"
+                                + (f" and active item gen {(wq_act.get('gen') or '?')[:8]} (phase {wq_act.get('phase') or '?'}, "
+                                   f"lane {wq_act.get('lane') or '?'}) unresolved" if wq_act else ""), "since": since,
                       "age_s": age_s(parse_ts(since)), "next": nxt})
     r = dev.get("running")
     if r and r["elapsed_s"] and r["elapsed_s"] > KIT_STUCK_H * 3600:

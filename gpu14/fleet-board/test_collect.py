@@ -310,6 +310,53 @@ class BdFixtureOverride(unittest.TestCase):
         self.assertEqual(rc, 127)
 
 
+class StoppedWindowQueue(unittest.TestCase):
+    """tsp-mc9m.41.1030.55.1: window-queue.sh keeps .active and writes .pause when it stops after popping the only row;
+    depth 0 plus an active item on a paused/stopped queue is a device alert and a crit tile."""
+    ACTIVE = {"gen": "f" * 32, "lane": "drc-g3", "owner": "gpu-14", "label": "x", "phase": "booting",
+              "since": "2026-10-20T17:00:00Z", "pkg": "p"}
+
+    def dev(self, depth, active, paused=False, running=True):
+        return {"halted": False, "runner_alive": True, "pending_count": 0, "kit_running": False, "running": None,
+                "window_queue": {"depth": depth, "active": active, "paused": paused, "running": running,
+                                 "pause_line": "STOP x" if paused else None, "pause_at": "2026-10-20T17:05:00Z" if paused else None}}
+
+    def wq_needs(self, dv):
+        return [n for n in collect.classify_device(dv) if n["id"] == "window-queue"]
+
+    def test_paused_depth0_active_alerts(self):
+        n = self.wq_needs(self.dev(0, self.ACTIVE, paused=True))
+        self.assertEqual([x["kind"] for x in n], ["device"])
+        self.assertIn("ffffffff", n[0]["reason"])
+
+    def test_stopped_depth0_active_alerts(self):
+        self.assertEqual([x["kind"] for x in self.wq_needs(self.dev(0, self.ACTIVE, running=False))], ["device"])
+
+    def test_paused_depth0_no_active_is_quiet(self):
+        self.assertEqual(self.wq_needs(self.dev(0, None, paused=True)), [])
+
+    def test_running_with_active_is_quiet(self):
+        self.assertEqual(self.wq_needs(self.dev(0, self.ACTIVE)), [])
+
+    def test_paused_with_depth_still_alerts(self):
+        self.assertEqual(len(self.wq_needs(self.dev(2, None, paused=True))), 1)
+
+    def tile(self, depth, active, paused=False, running=True):
+        return render.device_tile({"running": None, "halted": False, "pending": 0, "runner_alive": True,
+                                   "wq_depth": depth, "wq_held": 0, "wq_active": active, "wq_active_phase": "booting",
+                                   "wq_paused": paused, "wq_running": running})
+
+    def test_tile_crit_when_stopped_with_active(self):
+        self.assertEqual(self.tile(0, "f" * 32, paused=True)[0], "crit")
+        self.assertEqual(self.tile(0, "f" * 32, running=False)[0], "crit")
+
+    def test_tile_good_when_running_with_active(self):
+        self.assertEqual(self.tile(0, "f" * 32)[0], "good")
+
+    def test_tile_not_crit_when_paused_empty(self):
+        self.assertNotEqual(self.tile(0, None, paused=True)[0], "crit")
+
+
 class RenderGroups(unittest.TestCase):
     D = {"owned": [{"id": "tsp-mc9m.41.1030.28", "title": "t28", "status": "in_progress", "assignee": "proc-coord",
                     "tier": "exec", "parent": "tsp-mc9m.41.1030", "updated_at": "2026-10-20T00:00:00Z", "age_s": 57600}],
