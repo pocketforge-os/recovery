@@ -3,21 +3,20 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import pathlib
 import sys
 import tempfile
+import types
 import unittest
 
-# Always run the checked-out source: never load or write cached bytecode.
-sys.dont_write_bytecode = True
-
 HERE = pathlib.Path(__file__).resolve().parent
-SPEC = importlib.util.spec_from_file_location("battery_probe", HERE / "battery_probe.py")
-assert SPEC and SPEC.loader
-probe = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(probe)
+# Compile the checked-out source text directly: no import machinery, so a
+# cached .pyc can never stand in for the file under test.
+SOURCE = HERE / "battery_probe.py"
+probe = types.ModuleType("battery_probe")
+probe.__file__ = str(SOURCE)
+exec(compile(SOURCE.read_text(encoding="utf-8"), str(SOURCE), "exec"), probe.__dict__)
 
 RAW = "b1152bfa77897ac7516198d76c27ca0dddf9fa82c1a60edd947773c5c08b5e29"
 BOOT_ID = "0300342b-418b-4f2f-ba6a-34f284731119"
