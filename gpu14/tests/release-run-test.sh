@@ -37,7 +37,8 @@ PY
 esac
 EOF
 printf '#!/bin/sh\nexit 0\n' > "$STUBS/gh"
-printf '#!/bin/sh\necho "$*" >> "%s/remove"\n[ -z "${FAKE_RM_FAIL:-}" ] || { echo "pf-wt: refuse=x reason=ownership_unproven" >&2; exit 1; }\n' "$CALLS" > "$STUBS/pf-automation-tool"
+# The pf-wt double removes the named set (as the real one does) unless FAKE_RM_FAIL makes it refuse.
+printf '#!/bin/sh\necho "$*" >> "%s/remove"\n[ -z "${FAKE_RM_FAIL:-}" ] || { echo "pf-wt: refuse=x reason=ownership_unproven" >&2; exit 1; }\n[ "$1 $2" != "pf-wt.sh rm" ] || rm -rf "$PF_RELEASE_WT_BASE/$3"\n' "$CALLS" > "$STUBS/pf-automation-tool"
 chmod +x "$GPU/pf-task-run-home" "$STUBS"/*
 
 git init -q --bare -b main "$TMP/origin.git"
@@ -85,9 +86,22 @@ run_case tsp-keep STUB_RECEIPT='{}'
 
 # 4b. The run is released but the remover refuses (e.g. the removal guard): the failure propagates (exit 6), never
 #     a silent success that leaves the tree behind (review on recovery#26, tsp-mc9m.41.1030.62).
-run_case tsp-keep STUB_RECEIPT='{}' FAKE_RM_FAIL=1
+make_set tsp-rmfail 1 >/dev/null
+run_case tsp-rmfail STUB_RECEIPT='{}' FAKE_RM_FAIL=1
 [ "$rc" = 6 ] && grep -q 'WORKTREE_REMOVE_FAILED' <<<"$out" && grep -q 'reason=ownership_unproven' <<<"$out" \
   && ok 'a refused removal after release exits 6 and says so' || bad "refused removal after release (rc=$rc out=$out)"
+
+# 4c. Overridden root (WORKTREE_ROOT): the per-repo remove succeeds but a stray file keeps the set dir; that is a
+#     surviving verified path, so exit 6, not success (review on recovery#26).
+git clone -q "$TMP/origin.git" "$TMP/primary-ovr"
+mkdir -p "$WT/tsp-ovr-r2"
+git -C "$TMP/primary-ovr" worktree add -q -b tsp-ovr "$WT/tsp-ovr-r2/repo" origin/main 2>/dev/null
+git -C "$WT/tsp-ovr-r2/repo" branch -q --set-upstream-to=origin/main 2>/dev/null
+: > "$WT/tsp-ovr-r2/stray"
+run_case tsp-ovr STUB_RECEIPT='{}' WORKTREE_ROOT="$WT/tsp-ovr-r2" RUN_WORKTREE="$WT/tsp-ovr-r2/repo"
+[ "$rc" = 6 ] && [ ! -e "$WT/tsp-ovr-r2/repo" ] && grep -q "WORKTREE_REMOVE_FAILED path=$WT/tsp-ovr-r2 reason=set_dir_not_empty" <<<"$out" \
+  && ok 'an overridden set dir left non-empty after release exits 6' || bad "overridden set dir survivor (rc=$rc out=$out)"
+rm -f "$WT/tsp-ovr-r2/stray"
 
 # 5. PRESERVATION bundle: supersede.preservation + retention requested, receipt sha256 read back.
 repo=$(make_set tsp-bundle 0)

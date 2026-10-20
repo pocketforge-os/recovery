@@ -310,6 +310,7 @@ elif [ "$ROOT" = "$WT_BASE/$BEAD" ]; then
   # 2026-10-10: the shared ~/.local/bin/pf-wt is 1010 commits stale (tsp-hqm1p.52) and cannot remove a
   # set holding a pf-wt evidence target (tsp-f3fm.234); the pinned origin/main pf-wt can.
   remove_step "$PF_TOOL" pf-wt.sh rm "$BEAD"
+  if [ -e "$ROOT" ]; then echo "WORKTREE_REMOVE_FAILED path=$ROOT reason=set_survived (run IS released)"; cleanup_failed=1; fi
 else
   # 2026-10-06: with WORKTREE_ROOT=<...-r2> the checks verified ROOT, but `pf-wt rm $BEAD` removed
   # /home/matt/wt/$BEAD, a DIFFERENT (preserved) run's tree. Remove only the verified ROOT, per repo,
@@ -326,6 +327,7 @@ else
     remove_step git -C "$d" worktree remove "$d"
     if [ -e "$d" ]; then echo "WORKTREE_REMOVE_FAILED path=$d (run IS released)"; cleanup_failed=1; else echo "removed worktree $d"; fi
   done
-  if [ ! -e "$ROOT" ]; then echo "set dir $ROOT already removed"; elif rmdir "$ROOT" 2>/dev/null; then echo "removed set dir $ROOT"; else echo "set dir $ROOT kept (not empty)"; fi
+  if [ ! -e "$ROOT" ]; then echo "set dir $ROOT already removed"; elif rmdir "$ROOT" 2>/dev/null; then echo "removed set dir $ROOT"
+  else echo "WORKTREE_REMOVE_FAILED path=$ROOT reason=set_dir_not_empty (run IS released)"; cleanup_failed=1; fi
 fi
 [ "$cleanup_failed" = 0 ] || exit 6
