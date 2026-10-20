@@ -606,11 +606,12 @@ c12() {
 # C13 (2026-10-20 14:22Z, budget replay 946aed02: staged, full FelBoot, then boot-open RESUME_RECEIPT_WRITE_FAILED):
 # the template carried "OriginalBootReceipt": "@ORIGINAL_BOOT_RECEIPT@" unrendered and nothing validated it before FEL
 # (tsp-mc9m.41.1030.47). Every boot-open request in the package must have no @NAME@ token except the two the runtime
-# renders, and an OriginalBootReceipt that is absolute, realpath-inside <package>/series/, and not yet written. The
+# renders, and an OriginalBootReceipt that is absolute, realpath-inside <package>/series/, not yet written and
+# writable (nearest existing ancestor a writable directory). The
 # automation stage and session-resume make the same refusal (ORIGINAL_BOOT_RECEIPT_PATH_INVALID /
 # UNRENDERED_TEMPLATE_TOKEN). Not overridable: a FAIL here always costs a boot.
 c13() {
-  local why=() files=() f toks bad receipt series resolved
+  local why=() files=() f toks bad receipt series resolved parent
   for f in boot-open-request.template.json boot-open-request.json stage/boot-open-request.json; do
     [ -f "$P/$f" ] && files+=("$f")
   done
@@ -632,7 +633,15 @@ c13() {
       *) why+=("ORIGINAL_BOOT_RECEIPT_PATH_INVALID file=$f receipt=outside_series:$(clean "$resolved")"); continue ;;
     esac
     if [ -e "$receipt" ] || [ -L "$receipt" ] || [ -e "$resolved" ]; then
-      why+=("ORIGINAL_BOOT_RECEIPT_PATH_INVALID file=$f receipt=exists:$(clean "$resolved")")
+      why+=("ORIGINAL_BOOT_RECEIPT_PATH_INVALID file=$f receipt=exists:$(clean "$resolved")"); continue
+    fi
+    # boot-open writes the receipt with mkdir -p of its parent, then an exclusive create. A missing intermediate
+    # directory is created; an existing non-directory component or a non-writable nearest existing ancestor fails
+    # only after FEL, so refuse it here.
+    parent=$(dirname -- "$resolved")
+    while [ ! -e "$parent" ] && [ ! -L "$parent" ]; do parent=$(dirname -- "$parent"); done
+    if [ ! -d "$parent" ] || [ ! -w "$parent" ] || [ ! -x "$parent" ]; then
+      why+=("ORIGINAL_BOOT_RECEIPT_PATH_INVALID file=$f receipt=parent_unwritable:$(clean "$parent")")
     fi
   done
   if [ ${#why[@]} -eq 0 ]; then emit C13 PASS "boot_open_requests_rendered files=$(join "${files[@]}")"

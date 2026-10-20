@@ -58,6 +58,22 @@ pkg existing "\"__P__/series/initial-flash.json\""
 sed -i "s#__P__#$PK#" "$PK/boot-open-request.template.json"; echo '{}' > "$PK/series/initial-flash.json"
 expect existing_receipt_fails FAIL "receipt=exists"
 
+# boot-open creates missing parents (mkdir -p), so a missing intermediate directory passes; a non-directory component
+# or a non-writable parent fails only after FEL and must be refused here.
+pkg missing_parent "\"__P__/series/run-1/initial-flash.json\""
+sed -i "s#__P__#$PK#" "$PK/boot-open-request.template.json"
+expect missing_intermediate_dir_passes PASS boot_open_requests_rendered
+
+pkg file_parent "\"__P__/series/blocker/initial-flash.json\""
+sed -i "s#__P__#$PK#" "$PK/boot-open-request.template.json"; echo x > "$PK/series/blocker"
+expect file_parent_fails FAIL "receipt=parent_unwritable:$PK/series/blocker"
+
+pkg readonly_parent "\"__P__/series/initial-flash.json\""
+sed -i "s#__P__#$PK#" "$PK/boot-open-request.template.json"; chmod 500 "$PK/series"
+if [ -w "$PK/series" ]; then ok "readonly_parent_fails (skipped: running as a user that bypasses mode bits)"
+else expect readonly_parent_fails FAIL "receipt=parent_unwritable:$PK/series"; fi
+chmod 700 "$PK/series"
+
 pkg missing ''
 sed -i 's#,"OriginalBootReceipt":}#}#' "$PK/boot-open-request.template.json"
 expect missing_receipt_fails FAIL "receipt=unreadable"
