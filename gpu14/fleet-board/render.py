@@ -749,19 +749,39 @@ def render_velocity(d):
 
 RUNNER_FLEET_TOOL = os.environ.get("FB_RUNNER_FLEET_TOOL",
                                    os.path.expanduser("~/.local/libexec/pf-runner-fleet-status/pf-runner-fleet-status.py"))
+# 2026-10-20 (tsp-73epc.2.2.2): the status file is overridable (hermetic tests) and is read here too, so a missing,
+# unreadable or old status.json renders stale whatever the installed tool version says.
+RUNNER_FLEET_STATUS = os.environ.get("FB_RUNNER_FLEET_STATUS",
+                                     os.path.expanduser("~/.local/state/pf-runner-fleet-status/status.json"))
+RUNNER_FLEET_STALE_S = 7200     # checked_at older than 2 h is stale
 
 
 def render_runner_fleet():
     """tsp-73epc.2.2.2: the runner-fleet section from pf-runner-fleet-status status.json (zero LLM).
     The tool renders stale/missing as level "stale"; a tool failure is shown as stale too, never omitted."""
     import subprocess
+    import time
     try:
-        r = subprocess.run([sys.executable, RUNNER_FLEET_TOOL, "board"], capture_output=True, text=True, timeout=30)
+        r = subprocess.run([sys.executable, RUNNER_FLEET_TOOL, "board", "--status", RUNNER_FLEET_STATUS],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:   # a failed tool is never a fresh result, whatever it printed (review 5589706893)
+            raise RuntimeError(f"tool exit {r.returncode}")
         out = json.loads(r.stdout)
-        return out["body"], out["count"], out["level"], out["note"]
+        body, count, level, note = out["body"], out["count"], out["level"], out["note"]
     except Exception as exc:
         return (f'<p class="empty">{pill("stale", "crit")} runner fleet status unavailable: {e(type(exc).__name__)}</p>',
                 0, "stale", "stale: renderer failed")
+    try:
+        with open(RUNNER_FLEET_STATUS) as f:
+            age = time.time() - float(json.load(f)["checked_at"])
+    except Exception:
+        age = None
+    if level != "stale" and (age is None or age > RUNNER_FLEET_STALE_S):
+        why = "status.json missing or unreadable" if age is None else f"last check {fmt_age(age)} ago"
+        body = (f'<p class="empty">{pill("stale", "crit")} runner fleet status is stale: {e(why)}; '
+                f'the tool reported {e(level)}.</p>' + body)
+        level, note = "stale", f"stale: {why}"
+    return body, count, level, note
 
 
 def device_tile(dev):
