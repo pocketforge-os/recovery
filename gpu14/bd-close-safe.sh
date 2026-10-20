@@ -25,6 +25,8 @@ SRC=${BD_CLOSE_SAFE_SRC_ROOT:-/home/matt}
 # 2026-10-20 (tsp-mc9m.41.995.130.4): tests point BD_CLOSE_SAFE_BD at a canned double; never a bd stub on PATH
 # (a PATH stub that fell through to the shim looped 114k processes, tsp-mc9m.41.1030.58).
 BD=${BD_CLOSE_SAFE_BD:-bd}
+# pf-wt's per-mirror flock dir (pf-wt.sh LOCK_DIR: /run/lock, else $TMPDIR//tmp); the mirror fallback fetch takes it.
+LOCKS=${BD_CLOSE_SAFE_LOCK_DIR:-/run/lock}; [ -n "${BD_CLOSE_SAFE_LOCK_DIR:-}" ] || [ -w "$LOCKS" ] || LOCKS=${TMPDIR:-/tmp}
 check=0; keep_runs=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -117,8 +119,18 @@ for e in "${kept[@]}"; do case "$have" in *" unreleased_run=${e%% *} "*) ;; *) i
 rel=${rels[0]}
 for w in "${wims[@]}"; do
   spec=${w#work_in_main=}; sha=${spec##*@}; repo=${spec%@*}; repo=${repo##*/}; dir=$SRC/$repo
-  git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || not_in_main "$spec" repo_missing
-  timeout 120 git -C "$dir" fetch -q origin >/dev/null 2>&1 || not_in_main "$spec" fetch_failed
+  via=
+  if git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
+    timeout 120 git -C "$dir" fetch -q origin >/dev/null 2>&1 || not_in_main "$spec" fetch_failed
+  else
+    # 2026-10-20 (tsp-mc9m.41.995.130.4): no shared checkout (e.g. kernel-sunxi-7.x) -> the pf-wt bare mirror, fetched
+    # under pf-wt's own mirror lock into refs/remotes/origin/* only (never a local branch). Neither present: refuse.
+    dir=$WT/.mirrors/$repo.git; via=" via=mirror:$dir"
+    [ -d "$dir" ] && [ "$(git -C "$dir" rev-parse --is-bare-repository 2>/dev/null)" = true ] || not_in_main "$spec" repo_missing
+    flock -w 60 -E 75 "$LOCKS/pf-wt-$repo.lock" timeout 120 git -C "$dir" fetch -q origin '+refs/heads/*:refs/remotes/origin/*' >/dev/null 2>&1; frc=$?
+    [ "$frc" != 75 ] || not_in_main "$spec" mirror_locked
+    [ "$frc" = 0 ] || not_in_main "$spec" fetch_failed
+  fi
   # The default branch is read from the remote NOW: fetch never refreshes the cached refs/remotes/origin/HEAD (review #21).
   head=$(timeout 120 git -C "$dir" ls-remote --symref origin HEAD 2>/dev/null) || not_in_main "$spec" origin_head_unresolved
   b=$(printf '%s\n' "$head" | awk '$1 == "ref:" && $3 == "HEAD" {sub("^refs/heads/", "", $2); print $2; exit}')
@@ -126,7 +138,7 @@ for w in "${wims[@]}"; do
   else for b in main master; do git -C "$dir" rev-parse -q --verify "refs/remotes/origin/$b" >/dev/null && { def=refs/remotes/origin/$b; break; }; done; fi
   [ -n "${def:-}" ] || not_in_main "$spec" no_origin_default_branch
   git -C "$dir" merge-base --is-ancestor "$sha" "$def" 2>/dev/null || not_in_main "$spec" "not_ancestor of=${def#refs/remotes/}"
-  echo "BD_CLOSE_SAFE work_in_main=$spec ancestor_of=${def#refs/remotes/}"; unset def
+  echo "BD_CLOSE_SAFE work_in_main=$spec ancestor_of=${def#refs/remotes/}$via"; unset def
 done
 kept_ids=$(printf '%s\n' "${kept[@]}" | awk '{print $1}' | paste -sd, -)
 track_line() { echo "typed_close bead=$bead unreleased_run=${1%% *} worktree=${1#* } ${wims[*]}"; }
@@ -135,7 +147,11 @@ if [ "$check" = 1 ]; then
   echo "BD_CLOSE_SAFE_CHECK_OK bead=$bead keep_worktree=1 kept=$kept_ids release_tracked_by=$rel"; exit 0
 fi
 cd "$MC" || { echo "BD_CLOSE_SAFE_REFUSED reason=mission_control_missing dir=$MC"; exit 2; }
-"$BD" close "$bead" --keep-worktree --reason "$*" || { rc=$?; echo "BD_CLOSE_SAFE_CLOSE_FAILED bead=$bead rc=$rc"; exit "$rc"; }
+# 2026-10-20 (tsp-mc9m.41.995.130.4): each kept run's mapped worktree is passed to close_gate as
+# --kept-live-worktree, so that run's own idle runtime server does not block (close_gate=kept_live); nothing else is.
+close_args=(close "$bead" --keep-worktree)
+for e in "${kept[@]}"; do case "${e#* }" in /*) close_args+=(--kept-live-worktree "${e#* }") ;; esac; done
+"$BD" "${close_args[@]}" --reason "$*" || { rc=$?; echo "BD_CLOSE_SAFE_CLOSE_FAILED bead=$bead rc=$rc"; exit "$rc"; }
 track_failed=0
 for e in "${kept[@]}"; do
   line=$(track_line "$e")
