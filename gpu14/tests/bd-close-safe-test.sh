@@ -61,7 +61,7 @@ run_case() { # args...
   out=$(cd "$TMP" && env -u BASH_ENV -u BD_CLOSE_FOREIGN_OK PATH="$STUBS:$PATH" GPU14_ROOT="$GPU" BD_CLOSE_SAFE_WT_ROOT="$WT" \
         BD_CLOSE_SAFE_SRC_ROOT="$SRC" BD_CLOSE_SAFE_MC="$MC" ${CASE_ENV:-} bash "$SCRIPT" "$@" 2>&1); rc=$?
 }
-nbd() { ls "$CALLS" | grep -c '^bd\.[0-9]*$'; }
+nbd() { local n=0 f; for f in "$CALLS"/bd.*; do [[ "$f" =~ /bd\.[0-9]+$ ]] && n=$((n+1)); done; echo "$n"; }
 bdargs() { tr '\n' ' ' < "$CALLS/bd.$1" | sed 's/ $//'; }
 expect() { # name expected_rc expected_out
   [ "$rc" = "$2" ] && [ "$out" = "$3" ] && ok "$1" || bad "$1 (rc=$rc want $2)"$'\n'"--- got:"$'\n'"$out"$'\n'"--- want:"$'\n'"$3"
@@ -81,7 +81,7 @@ echo '-- legacy (no --keep-for-run): output byte-for-byte as before'
 run_case --check tsp-a
 expect 'released run: --check OK' 0 "BD_CLOSE_SAFE run=$RA state=released task=tsp-a worktree=$WT/tsp-a/repo
 BD_CLOSE_SAFE_CHECK_OK bead=tsp-a"
-run_case tsp-a done here
+run_case tsp-a 'done here'
 expect 'released run: closes' 0 "BD_CLOSE_SAFE run=$RA state=released task=tsp-a worktree=$WT/tsp-a/repo
 fake bd close ok"
 [ "$(nbd)" = 1 ] && [ "$(bdargs 0)" = "cwd=$MC close tsp-a --reason done here" ] \
@@ -160,8 +160,10 @@ for spec in "missing unreleased_run=|$WIM release_tracked_by=tsp-rel|missing=unr
       && ok "$name refuses ($mode)" || bad "$name refuses ($mode) (rc=$rc out=$out)"
   done
 done
+run_case --check --keep-for-run $RK tsp-k
+[ "$rc" = 2 ] && grep -q 'reason=typed_close_reason_incomplete' <<<"$out" && [ "$(nbd)" = 0 ] && ok '--check: kept run with no reason at all refuses' || bad "--check no reason (rc=$rc out=$out)"
 run_case --keep-for-run $RK tsp-k
-[ "$rc" = 2 ] && grep -q 'reason=typed_close_reason_incomplete' <<<"$out" && [ "$(nbd)" = 0 ] && ok 'kept run with no reason at all refuses' || bad "no reason (rc=$rc out=$out)"
+expect 'close: kept run with no reason refuses before any lookup' 2 "BD_CLOSE_SAFE_REFUSED reason=missing_close_reason"
 
 for spec in "non-ancestor sha|work_in_main=src@$UNLANDED|not_ancestor" \
             "fetch failure|work_in_main=nofetch@$LANDED|fetch_failed" \
