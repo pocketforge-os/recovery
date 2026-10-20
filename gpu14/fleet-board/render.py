@@ -251,6 +251,55 @@ def render_dispatchable(d):
     return "".join(parts)
 
 
+def render_window_queue(wq):
+    """2026-10-19: the live bench queue (window-queue.sh over fleet-board/window-queue.tsv)."""
+    parts = []
+    depth = wq.get("depth") or 0
+    if wq.get("paused"):
+        loop = chip("window-queue.sh PAUSED", "crit")
+    elif wq.get("running"):
+        loop = chip("window-queue.sh running", "good")
+    elif wq.get("running") is False:
+        loop = chip("window-queue.sh not running", "crit" if depth else "muted")
+    else:
+        loop = chip("loop state unknown", "muted")
+    a = wq.get("active")
+    act = (f' · active {mono((a.get("gen") or "")[:8], "lane")} {e(a.get("lane"))} {e(a.get("label"))} '
+           f'phase={e(a.get("phase"))} since {e(short_ts(a.get("since")))}') if a else " · no active item"
+    parts.append(f'<h3>Window queue <span class="count">{e(depth)}</span><span class="note">window-queue.sh over window-queue.tsv; first row is next</span></h3>')
+    if wq.get("paused"):
+        parts.append(f'<div class="banner banner-crit"><strong>Window queue PAUSED</strong> {e(wq.get("pause_line"))} <span class="dim">({e(short_ts(wq.get("pause_at")))})</span></div>')
+    parts.append(f'<div class="sub">{loop} · {e(depth)} queued · {e(wq.get("held_count", 0))} held · {e(wq.get("withdrawn_count", 0))} withdrawn · '
+                 f'{e(wq.get("done_count", 0))} done · {e(wq.get("failed_count", 0))} failed{act}</div>')
+    pend = wq.get("pending") or []
+    if pend:
+        rows = "".join(
+            f'<tr data-filter="{e(r["lane"])} {e(r["label"])} {e(r["gen"])}"><td class="num">{e(r["position"])}</td><td>{mono(r["lane"], "lane")}</td>'
+            f'<td>{e(r["label"])}<div class="sub">{e(r.get("note") or "")}</div></td><td>{mono((r["gen"] or "")[:8])}</td><td class="num">{e(r["steps"])}</td></tr>'
+            for r in pend)
+        parts.append('<div class="scroll"><table class="grid"><thead><tr><th class="num">#</th><th>Lane</th><th>Label</th><th>Gen</th><th class="num">Steps</th></tr></thead><tbody>' + rows + "</tbody></table></div>")
+    else:
+        parts.append('<p class="empty">window-queue.tsv has no pending row.</p>')
+    held = wq.get("held") or []
+    if held:
+        rows = "".join(
+            f'<tr data-filter="{e(r["lane"])} {e(r["label"])} {e(r["gen"])} {e(r.get("reason"))}"><td>{chip(r.get("hold") or "HELD", "warn")}</td><td>{mono(r["lane"], "lane")}</td>'
+            f'<td>{e(r["label"])}<div class="sub">{mono((r["gen"] or "")[:8])} · held {e(short_ts(r.get("held_at")))}</div></td><td><span class="raw">{e((r.get("reason") or "")[:240])}</span></td></tr>'
+            for r in held)
+        parts.append(f'<h3>Held in the window queue <span class="count">{e(wq.get("held_count", len(held)))}</span><span class="note">commented rows gpu-14 keeps out of the run order</span></h3>')
+        parts.append('<div class="scroll"><table class="grid"><thead><tr><th>Hold</th><th>Lane</th><th>Label · gen</th><th>Reason</th></tr></thead><tbody>' + rows + "</tbody></table></div>")
+    rec = wq.get("recent") or []
+    if rec:
+        rows = "".join(
+            f'<tr data-filter="{e(r["lane"])} {e(r["label"])} {e(r["gen"])} {e(r["outcome"])}"><td class="num">{e(short_ts(r["ts"]))}</td><td>{mono(r["lane"], "lane")}</td>'
+            f'<td>{e(r["label"])}<div class="sub">{mono((r["gen"] or "")[:8])}</div></td>'
+            f'<td>{chip(r["outcome"][:60], "good" if r["outcome"].endswith(":success") else ("crit" if r["src"] == "failed" or "failure" in r["outcome"] else "muted"))}</td></tr>'
+            for r in rec)
+        parts.append(f'<h3>Window-queue outcomes <span class="count">{len(rec)}</span><span class="note">window-queue.done.tsv + failed.tsv, newest first</span></h3>')
+        parts.append('<div class="scroll"><table class="grid"><thead><tr><th class="num">When</th><th>Lane</th><th>Label · gen</th><th>Outcome</th></tr></thead><tbody>' + rows + "</tbody></table></div>")
+    return "".join(parts)
+
+
 def render_device(d):
     dev = d["device"]
     parts = []
@@ -269,8 +318,10 @@ def render_device(d):
         parts.append(f'<div class="running idle"><div class="running-head">{pill("IDLE", "muted")} <span class="t">bench has no step running</span></div>'
                      f'<div class="sub">{runner} {kit} · {e(dev["pending_count"])} pending · {e(dev["held_count"])} held (#) · {e(dev["done_count"])} done</div>'
                      + (f'<div class="sub">last line: <span class="raw">{e(dev.get("last_line"))}</span></div>' if dev.get("last_line") else "") + "</div>")
+    if dev.get("window_queue"):
+        parts.append(render_window_queue(dev["window_queue"]))
     nx = dev.get("next") or []
-    parts.append(f'<h3>Next on the bench <span class="count">{dev["pending_count"]}</span><span class="note">strictly serial; {len(nx)} shown</span></h3>')
+    parts.append(f'<h3>Legacy kits queue <span class="count">{dev["pending_count"]}</span><span class="note">queue-runner.sh over queue.tsv (retired); {len(nx)} shown</span></h3>')
     if nx:
         rows = "".join(
             f'<tr data-filter="{e(n["name"])} {e(n["path"])}"><td class="num">{n["position"]}</td><td>{mono(n["name"], "lane")}</td>'
@@ -325,6 +376,39 @@ def render_stale(d):
     return "".join(parts)
 
 
+# 2026-10-20 (tsp-mc9m.41.1030.55): beads another coordinator drives and parked runs kept only as evidence are not
+# gpu-14's to act on; each gets its own muted group instead of a row in "Needs gpu-14".
+def render_owned(d, who):
+    rows = [o for o in d.get("owned") or [] if o.get("assignee") == who]
+    if not rows:
+        return f'<p class="empty">No in-scope bead without a lane is assigned to {e(who)}.</p>'
+    body = "".join(
+        f'<tr data-filter="{e(o["id"])} {e(o["title"])} {e(o.get("parent"))} {e(who)}"><td>{mono(o["id"])}</td>'
+        f'<td class="num">{e(fmt_age(o.get("age_s")))}</td><td>{e(o.get("status"))}</td><td>{e(o.get("tier") or "–")}</td>'
+        f'<td>{e(o["title"])}<div class="sub">under {mono(o.get("parent"))} · assignee {e(who)}</div></td>'
+        f'<td class="num">{e(short_ts(o.get("updated_at")))}</td></tr>'
+        for o in rows[:STALE_ROWS])
+    more = (f'<details class="more"><summary>{len(rows) - STALE_ROWS} more (data.json owned)</summary><p class="idlist">'
+            + " ".join(mono(o["id"]) for o in rows[STALE_ROWS:]) + "</p></details>") if len(rows) > STALE_ROWS else ""
+    return ('<div class="scroll"><table class="grid"><thead><tr><th>Bead</th><th class="num">Idle</th><th>Status</th>'
+            '<th>Tier</th><th>Title</th><th class="num">Updated</th></tr></thead><tbody>' + body + "</tbody></table></div>" + more)
+
+
+def render_evidence(d):
+    rows = d.get("evidence") or []
+    if not rows:
+        return '<p class="empty">No parked run is kept as evidence (parked.tsv evidence_for=).</p>'
+    body = "".join(
+        f'<tr data-filter="{e(x["lane"])} {e(x.get("run"))} {e(x.get("bead"))} {e(x.get("who"))} {e(x.get("keeper_bead"))}">'
+        f'<td>{mono(x["lane"], "lane")}<div class="sub">{mono(x.get("run"))}</div></td><td>{mono(x.get("bead"))}</td>'
+        f'<td>{e(x.get("who"))}<div class="sub">{"until " + mono(x["keeper_bead"]) + " closes" if x.get("keeper_bead") else "no release bead named"}</div></td>'
+        f'<td class="num" title="since {e(x.get("since"))}">{e(fmt_age(x.get("age_s")))}</td>'
+        f'<td><span class="raw">{e((x.get("reason") or "")[:220])}</span></td></tr>'
+        for x in rows)
+    return ('<div class="scroll"><table class="grid"><thead><tr><th>Lane / run</th><th>Bead</th><th>Kept for</th>'
+            '<th class="num">Parked</th><th>Park reason</th></tr></thead><tbody>' + body + "</tbody></table></div>")
+
+
 def render_owner(d):
     o = d["owner_asks"]
     if o.get("error"):
@@ -349,7 +433,7 @@ def render_footer(d):
     roots = " ".join(mono(r) for r in d.get("campaign_roots", []))
     parts.append(f'<p class="fine">Scope roots: {roots}</p>')
     parts.append(f'<p class="fine thresholds">Thresholds: {ths}</p>')
-    parts.append(f'<p class="fine">Sources: bd list --all / bd ready / bd comments (stale candidates only); lane drive logs + ps + admission files + pf-task run.status (primary-key lookups, sequential, budgeted); gh pr view for referenced PRs; queue.tsv / queue.done / device-queue.txt; gpu14-owner-questions.md. Collected on {e(d.get("host"))} in {e(d.get("runtime_s"))} s. Generated by /home/matt/recovery/gpu14/fleet-board/refresh.sh.</p>')
+    parts.append(f'<p class="fine">Sources: bd list --all / bd ready / bd comments (stale candidates only); lane drive logs + ps + admission files + pf-task run.status (primary-key lookups, sequential, budgeted); gh pr view for referenced PRs; window-queue.tsv / .done.tsv / .failed.tsv / .active / .pause / window-done (live queue) and queue.tsv / queue.done / device-queue.txt (legacy); gpu14-owner-questions.md. Collected on {e(d.get("host"))} in {e(d.get("runtime_s"))} s. Generated by /home/matt/recovery/gpu14/fleet-board/refresh.sh.</p>')
     return "".join(parts)
 
 
@@ -663,6 +747,39 @@ def render_velocity(d):
     return "".join(body), sum(x["closed"] for x in sa["days"])
 
 
+RUNNER_FLEET_TOOL = os.environ.get("FB_RUNNER_FLEET_TOOL",
+                                   os.path.expanduser("~/.local/libexec/pf-runner-fleet-status/pf-runner-fleet-status.py"))
+
+
+def render_runner_fleet():
+    """tsp-73epc.2.2.2: the runner-fleet section from pf-runner-fleet-status status.json (zero LLM).
+    The tool renders stale/missing as level "stale"; a tool failure is shown as stale too, never omitted."""
+    import subprocess
+    try:
+        r = subprocess.run([sys.executable, RUNNER_FLEET_TOOL, "board"], capture_output=True, text=True, timeout=30)
+        out = json.loads(r.stdout)
+        return out["body"], out["count"], out["level"], out["note"]
+    except Exception as exc:
+        return (f'<p class="empty">{pill("stale", "crit")} runner fleet status unavailable: {e(type(exc).__name__)}</p>',
+                0, "stale", "stale: renderer failed")
+
+
+def device_tile(dev):
+    """Device bench tile -> (severity, value, detail)."""
+    # 2026-10-19: the live queue is window-queue.sh; dev["pending"] is the retired queue.tsv count
+    wq_depth = dev.get("wq_depth") or 0
+    # 2026-10-20 (tsp-mc9m.41.1030.55.1): a paused/stopped queue still holding an active window is stopped too (depth
+    # is 0 once the only row was popped), and that active item must not turn the tile good.
+    wq_stopped = bool(wq_depth or dev.get("wq_active")) and (dev.get("wq_paused") or dev.get("wq_running") is False)
+    wq_loop = "paused" if dev.get("wq_paused") else ("running" if dev.get("wq_running") else ("off" if dev.get("wq_running") is False else "?"))
+    wq_act = f'window {dev["wq_active"][:8]} ({dev.get("wq_active_phase") or "?"})' if dev.get("wq_active") else None
+    dev_v = dev["running"] or wq_act or ("HALTED" if dev["halted"] else "idle")
+    dev_sev = "crit" if dev["halted"] or wq_stopped else ("good" if dev["running"] or wq_act else ("warn" if dev["pending"] and not dev["runner_alive"] else "info"))
+    dev_d = (f'{wq_depth} queued · {dev.get("wq_held") or 0} held · window queue {wq_loop}'
+             + (f' · legacy {dev["pending"]} queued' if dev["pending"] else ""))
+    return dev_sev, dev_v, dev_d
+
+
 def main():
     d = json.load(open(DATA))
     s = d["summary"]
@@ -671,14 +788,14 @@ def main():
     needs_sev = "crit" if s["needs"] else "good"
     nk = s.get("needs_by_kind") or {}
     kinds_txt = " · ".join(f"{KIND_LABEL.get(k, k).lower()} {v}" for k, v in nk.items() if v) or "nothing waiting"
-    dev_v = dev["running"] or ("HALTED" if dev["halted"] else "idle")
-    dev_sev = "crit" if dev["halted"] else ("good" if dev["running"] else ("warn" if dev["pending"] and not dev["runner_alive"] else "info"))
+    dev_sev, dev_v, dev_d = device_tile(dev)
+    wq_depth = dev.get("wq_depth") or 0
     tiles = [
         ("t-" + needs_sev, "Needs gpu-14", str(s["needs"]), kinds_txt, False),
         ("t-good" if s["lanes_running"] else "t-info", "Lanes running", str(s["lanes_running"]), f'of {s["lanes_total"]} live lanes · {s["lanes_needs"]} need gpu-14 · {s.get("lanes_unchecked", 0)} unchecked', False),
         ("t-warn" if s["lanes_waiting"] else "t-info", "Lanes waiting", str(s["lanes_waiting"]), "CI, device queue or a named blocker", False),
         ("t-info", "Dispatchable", str(s.get("dispatchable_recent", s["dispatchable"])), f'{s["newly_unblocked"]} newly unblocked · {s["dispatchable"] - s.get("dispatchable_recent", 0)} older backlog', False),
-        ("t-" + dev_sev, "Device bench", dev_v, f'{dev["pending"]} queued · runner {"alive" if dev["runner_alive"] else "off"}', True),
+        ("t-" + dev_sev, "Device bench", dev_v, dev_d, True),
         ("t-warn" if s["stale"] else "t-info", "Stale beads", str(s["stale"]), f'in_progress, no lane, > {th["STALE_BEAD_H"]} h quiet', False),
         ("t-info", "Owner asks", str(s["owner_asks"]), "live items in gpu14-owner-questions.md", False),
     ]
@@ -696,16 +813,24 @@ def main():
     body.append(f'<section class="strip" aria-label="summary">{strip}</section>')
     body.append(section("needs", "Needs gpu-14 now", s["needs"], render_needs(d),
                         "prioritized: merge-ready, handbacks, boot-ready kits, device, blocked, stale, undriven, newly unblocked"))
+    for who, cnt in (s.get("owned") or {}).items():
+        body.append(section(f"owned-{who}", f"Owned by {who}", cnt, render_owned(d, who),
+                            f"in scope, no lane, assignee {who}: theirs to drive, not gpu-14 needs", open_=False))
+    body.append(section("evidence", "Evidence kept", s.get("lanes_evidence", 0), render_evidence(d),
+                        "parked runs kept as evidence; each returns as a need when its keeper bead closes", open_=False))
     vel = render_velocity(d)
     if vel is not None:
         body.append(section("velocity", "Velocity", vel[1], vel[0],
                             "opened vs closed per day (7-day means), backlog, week over week · last 60 UTC days"))
+    rf_body, rf_count, rf_level, rf_note = render_runner_fleet()
+    body.append(section("runner-fleet", f"Runner fleet · {rf_level}", rf_count, rf_body, rf_note,
+                        open_=rf_level != "ok"))
     body.append(section("lanes", "Lanes", s["lanes_total"], render_lanes(d),
                         f'managed worker runs with a drive log touched in the last {th["LANE_LOG_WINDOW_H"]} h; needs first, then unknown, waiting, running'))
     body.append(section("dispatch", "Dispatchable work", s["dispatchable"], render_dispatchable(d),
                         "bd ready in scope with no lane: parallel set, then what each landing unblocks"))
-    body.append(section("device", "Device bench", dev["pending"], render_device(d),
-                        "one A133 handheld, strictly serial: queue-runner.sh over queue.tsv"))
+    body.append(section("device", "Device bench", wq_depth + dev["pending"], render_device(d),
+                        "one A133 handheld, strictly serial: window-queue.sh over window-queue.tsv (legacy queue-runner.sh over queue.tsv)"))
     body.append(section("stale", "Stale beads", s["stale"], render_stale(d),
                         f'in_progress, in scope, no lane, no update or comment for {th["STALE_BEAD_H"]} h', open_=bool(s["stale"])))
     body.append(section("owner", "Owner asks", s["owner_asks"], render_owner(d), "live items; defaults proceed without an answer", open_=False))
