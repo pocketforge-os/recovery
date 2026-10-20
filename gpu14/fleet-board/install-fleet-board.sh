@@ -6,19 +6,21 @@
 #                                         replaced file); if anything changed: daemon-reload + restart the TIMER only
 # Last line is always fleet_board_install=ok|drift|fail. Exit 2 is a usage error.
 #
+# The units are the gpu14/systemd/ copies, the same files gpu14/systemd/install.sh deploys (one source per unit).
 # Only the files named in SCRIPTS and UNITS are ever written. Everything else in the live board dir is live-only
 # data (parked.tsv, waits.tsv, data.json, needs/, window-done/, *.log, window-queue.*, cache/, lane-queue*,
 # notify-on-merge.txt, close-pending.tsv, *.bak*, fleet-board*.html, velocity.json) and is never read or written.
 #
 # env (defaults are the live gpu-14 paths; the hermetic test redirects all three):
 #   FB_LIVE_DIR  live board dir    (/home/matt/recovery/gpu14/fleet-board)
-#   FB_UNIT_DIR  user unit dir     ($HOME/.config/systemd/user)
+#   FB_UNIT_DIR  user unit dir     (${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user, the user manager's search path)
 #   SYSTEMCTL    systemctl binary  (systemctl)
 set -uo pipefail
 
 SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+UNIT_SRC=$(dirname "$SRC")/systemd
 LIVE=${FB_LIVE_DIR:-/home/matt/recovery/gpu14/fleet-board}
-UNIT_DIR=${FB_UNIT_DIR:-$HOME/.config/systemd/user}
+UNIT_DIR=${FB_UNIT_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}
 SYSTEMCTL=${SYSTEMCTL:-systemctl}
 TIMER=pf-fleet-board.timer
 SCRIPTS=(collect.py render.py refresh.sh velocity.py)
@@ -34,7 +36,7 @@ sha() { sha256sum "$1" | cut -c1-64; }
 managed() {
   local n
   for n in "${SCRIPTS[@]}"; do printf '%s %s %s\n' "$n" "$SRC/$n" "$LIVE/$n"; done
-  for n in "${UNITS[@]}"; do printf '%s %s %s\n' "$n" "$SRC/systemd/$n" "$UNIT_DIR/$n"; done
+  for n in "${UNITS[@]}"; do printf '%s %s %s\n' "$n" "$UNIT_SRC/$n" "$UNIT_DIR/$n"; done
 }
 
 # drift_of <name> <repo> <live>: prints one typed drift line, or nothing when the live copy matches.
@@ -79,7 +81,9 @@ while read -r name repo live; do
   if [ -f "$live" ]; then
     mode=$(stat -c %a "$live")
     [ -x "$repo" ] && mode=$(printf '%o' $((8#$mode | 8#111)))
-    cp -p "$live" "$live.bak-$stamp" || fail backup_failed "$live"
+    bak="$live.bak-$stamp"; i=1
+    while [ -e "$bak" ]; do bak="$live.bak-$stamp.$i"; i=$((i + 1)); done   # never overwrite an earlier backup
+    cp -p "$live" "$bak" || fail backup_failed "$live"
   elif [ -x "$repo" ]; then mode=755; else mode=644; fi
   tmp=$(mktemp "$dir/.$name.install.XXXXXX") || fail tmp_failed "$dir"
   if ! { cp "$repo" "$tmp" && chmod "$mode" "$tmp" && mv -f "$tmp" "$live"; }; then

@@ -3,6 +3,9 @@ Description=Regenerate the fleet board every 15 min (served on the tailnet by ta
 
 [Timer]
 OnBootSec=2min
+# Re-arm after any timer (re)start: OnBootSec plus OnUnitInactiveSec alone leave a timer restarted
+# after boot with no next elapse until its service runs again (tsp-mc9m.41.1030.45.1).
+OnActiveSec=2min
 OnUnitInactiveSec=15min
 AccuracySec=30s
 

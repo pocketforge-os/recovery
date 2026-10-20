@@ -101,7 +101,7 @@ A `waits.tsv` id ending in `.*` (for example `tsp-ihne1.*`) covers every descend
 
 ## Deploy
 
-The live board dir and the `pf-fleet-board.service`/`.timer` user units (copies in `systemd/`) are deployed from
+The live board dir and the `pf-fleet-board.service`/`.timer` user units (the `../systemd/` copies, shared with `gpu14/systemd/install.sh`) are deployed from
 a clean checkout of this repo, never hand-edited:
 
 ```

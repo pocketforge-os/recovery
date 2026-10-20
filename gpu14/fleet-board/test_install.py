@@ -16,6 +16,8 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "install-fleet-board.sh")
+UNIT_SRC = os.path.join(os.path.dirname(HERE), "systemd")   # gpu14/systemd: the one tracked copy of each unit
+REPO = os.path.dirname(os.path.dirname(HERE))
 SCRIPTS = ("collect.py", "render.py", "refresh.sh", "velocity.py")
 UNITS = ("pf-fleet-board.service", "pf-fleet-board.timer")
 # Live-only data next to the scripts: --apply must leave every one byte-identical and add nothing beside them.
@@ -74,7 +76,7 @@ class InstallFleetBoard(unittest.TestCase):
         for name in SCRIPTS:
             shutil.copy2(os.path.join(HERE, name), os.path.join(self.live, name))
         for name in UNITS:
-            shutil.copy2(os.path.join(HERE, "systemd", name), os.path.join(self.units, name))
+            shutil.copy2(os.path.join(UNIT_SRC, name), os.path.join(self.units, name))
 
     def seed_data(self):
         for rel in DATA:
@@ -84,11 +86,46 @@ class InstallFleetBoard(unittest.TestCase):
                 f.write(f"data {rel}\n")
 
     def test_repo_timer_rearms_after_restart(self):
-        with open(os.path.join(HERE, "systemd", "pf-fleet-board.timer")) as f:
+        with open(os.path.join(UNIT_SRC, "pf-fleet-board.timer")) as f:
             text = f.read()
         keys = set(re.findall(r"^(On[A-Za-z]+Sec)=", text, re.M))
         self.assertIn("OnActiveSec", keys, "a timer restarted after boot needs OnActiveSec= to re-arm")
         self.assertTrue({"OnUnitInactiveSec", "OnUnitActiveSec"} & keys)
+
+    def test_one_timer_source_and_both_installers_rearm(self):
+        out = subprocess.run(["git", "-C", REPO, "ls-files", "--", "*pf-fleet-board.timer", "*pf-fleet-board.service"],
+                             check=True, capture_output=True, text=True).stdout.split()
+        self.assertEqual(sorted(out), ["gpu14/systemd/pf-fleet-board.service", "gpu14/systemd/pf-fleet-board.timer"])
+        with open(os.path.join(UNIT_SRC, "install.sh")) as f:
+            text = f.read()
+        enable = re.search(r"(?m)^[^#\n]*enable --now [^\n]*pf-fleet-board\.timer", text)
+        self.assertTrue(enable, "install.sh enables the timer")
+        restart = re.search(r"(?m)^[^#\n]*\brestart\b[^\n]*pf-fleet-board\.timer([^\n]*)$", text[enable.end():])
+        self.assertTrue(restart, "install.sh must restart the timer after enable --now so OnActiveSec= applies")
+        self.assertNotIn("||", restart.group(1), "a masked restart reports success with the timer unarmed")
+
+    def test_default_unit_dir_follows_xdg_config_home(self):
+        xdg = os.path.join(self.tmp, "xdg")
+        env = {k: v for k, v in self.env.items() if k != "FB_UNIT_DIR"}
+        for extra, want in (({"XDG_CONFIG_HOME": xdg}, os.path.join(xdg, "systemd", "user")),
+                            ({}, os.path.join(self.tmp, ".config", "systemd", "user"))):
+            r = subprocess.run(["bash", SCRIPT, "--apply"], env=dict(env, **extra), capture_output=True, text=True,
+                               timeout=60)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            for name in UNITS:
+                self.assertEqual(sha(os.path.join(want, name)), sha(os.path.join(UNIT_SRC, name)), want)
+
+    def test_repeated_apply_keeps_every_backup(self):
+        self.seed_live_matching()
+        target = os.path.join(self.live, "render.py")
+        for n in range(3):
+            with open(target, "w") as f:
+                f.write(f"hand edit {n}\n")
+            r = self.run_script("--apply")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        baks = [os.path.join(self.live, f) for f in os.listdir(self.live) if f.startswith("render.py.bak-")]
+        contents = sorted(open(b).read() for b in baks)
+        self.assertEqual(contents, [f"hand edit {n}\n" for n in range(3)])
 
     def test_check_reports_missing_as_typed_drift(self):
         r = self.run_script("--check")
