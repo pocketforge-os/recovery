@@ -141,6 +141,20 @@ class ParkTokens(unittest.TestCase):
         n = self.assertFire("until_event=gen:drc-g3", extra=[other])
         self.assertIn("drc-g3", n["reason"])
 
+    def test_gen_fires_on_verdict_followed_by_continue(self):
+        other = lane("drc-g3", "pft-" + "b" * 24, st="CONTINUE", st_ts=NOW - dt.timedelta(minutes=30), driver=True)
+        verdict = dict(other["last_status"], ts=iso(NOW - dt.timedelta(hours=2)), state="HANDBACK")
+        older = dict(other["last_status"], ts=iso(OLD_PARK - dt.timedelta(hours=1)), state="BLOCKED")
+        other["statuses"] = [older, verdict, other["last_status"]]
+        n = self.assertFire("until_event=gen:drc-g3", extra=[other])
+        self.assertIn("HANDBACK", n["reason"])
+
+    def test_gen_holds_when_only_old_verdicts_in_history(self):
+        other = lane("drc-g3", "pft-" + "b" * 24, st="CONTINUE", st_ts=NOW - dt.timedelta(minutes=30), driver=True)
+        other["statuses"] = [dict(other["last_status"], ts=iso(OLD_PARK - dt.timedelta(hours=1)), state="HANDBACK"),
+                             other["last_status"]]
+        self.assertHold("until_event=gen:drc-g3", extra=[other])
+
     def test_gen_fires_when_named_lane_released(self):
         other = lane("drc-g3", "pft-" + "b" * 24, st="CI_WAIT", st_ts=NOW - dt.timedelta(hours=1), rs="released")
         self.assertFire("until_event=gen:drc-g3", extra=[other])

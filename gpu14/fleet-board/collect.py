@@ -1204,14 +1204,17 @@ def park_condition(reason, since, index, owner, lanes_by_name):
                 bad.append(f"{tok}: park time unreadable")
             elif m.group(1) == "gen":
                 ol = lanes_by_name.get(m.group(2))
-                ols = (ol or {}).get("last_status") or {}
-                ol_ts = parse_ts(ols.get("ts"))
+                # any NEEDS_STATES status since the park counts, even if a later CONTINUE/CI_WAIT followed it (review
+                # 5588845556): the whole lane status history, not only the last line
+                hist = ((ol or {}).get("statuses") or [(ol or {}).get("last_status") or {}])
+                verdict = next((x for x in hist if x.get("state") in NEEDS_STATES
+                                and (parse_ts(x.get("ts")) or since_d) > since_d), None)
                 if ol is None:
                     bad.append(f"{tok}: lane {m.group(2)} is not on the board")
                 elif ((ol.get("run_info") or {}).get("state")) == "released":
                     fires.append(f"lane {m.group(2)} is released")
-                elif ols.get("state") in NEEDS_STATES and ol_ts and ol_ts > since_d:
-                    fires.append(f"lane {m.group(2)} posted {ols['state']} at {iso(ol_ts)}")
+                elif verdict:
+                    fires.append(f"lane {m.group(2)} posted {verdict['state']} at {verdict['ts']}")
                 else:
                     holds.append(f"until lane {m.group(2)} posts a verdict")
             else:
