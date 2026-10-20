@@ -69,6 +69,20 @@ data.json schema (top level):
                     assigned to another coordinator (COORD_OWNERS); never needs or stale rows
   evidence          [{lane, run, bead, who, keeper_bead, reason, since, age_s}] parked runs kept as evidence
   beads_index       {id: {title, status, type, priority}} for every id referenced
+  hardware          {rows:[hwrow], tally:{state: n}, flags:{unowned, evidence_old, anchor_closed, no_anchor},
+                     source, comments_fetched, error}   one row per hardware block (hardware-rows.json)
+  priorities        {goals:[{id, tier, name, why, anchor, anchor_status, open_count, lanes, tally, rows:[hwrow]}]}
+                    hwrow = {id, name, subsystem|area, scope, driver, driver_source, anchor:[id], anchor_status:
+                             [{id, status}], open_count, open_top:[{id, title, status, priority}], last_activity,
+                             last_activity_age_s, lanes:[lane], queued:[{lane, bead}], state, state_source
+                             (hw_row|seed), build, evidence, evidence_at, evidence_by, evidence_age_s,
+                             flags:[unowned|evidence_old|anchor_closed|no_anchor]}
+                    state = the latest `HW_ROW state=<S> build=<N> evidence=<text>` comment on an anchor bead
+                    (optional row=<id> limits it to one row), else the seed (seed_state, seed_at)
+  backlog           {open_total, p0, p1, older_14d, buckets:[label], totals:[n], areas:[{area, total, p0, p1,
+                     counts:[n]}], other:{areas, total, p0, p1, counts}, areas_total, batches:[{batch, total,
+                     open, in_progress, blocked, closed, top:[{id, title, status, priority}]}]}
+                    every bead with status open (all scopes), age from created_at, area = id to two segments
 """
 import struct
 import collections
@@ -180,6 +194,25 @@ BD_TIMEOUT_S = 180
 COMMENTS_PARALLEL = 4
 COMMENTS_MAX = 150
 COMMENTS_TIMEOUT_S = 30
+# 2026-10-20 (gpu-14): hardware & driver rows and the open backlog. Rows live in hardware-rows.json beside this file;
+# their live state is the latest HW_ROW comment on an anchor bead (README "Hardware rows"). Anchor comments are fetched
+# only when the bead's comment_count moved since cache/hw-comments.json (bd comments per id is ~0.3 s; the bulk
+# `bd show --include-comments` took 32 s for the same ids).
+HW_ROWS_FILE = os.environ.get("FB_HW_ROWS") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "hardware-rows.json")
+HW_COMMENTS_CACHE = os.path.join(BOARD, "cache", "hw-comments.json")
+LANE_QUEUE_DIR = os.path.join(G, "fleet-board", "lane-queue")
+HW_EVIDENCE_OLD_D = 7           # a row's evidence older than this is flagged "evidence old"
+HW_TOP_OPEN = 3                 # open descendant beads listed per row (by priority)
+HW_COMMENTS_BUDGET_S = 45       # wall time for re-reading anchor comments per refresh (runs beside the pf-task lookups)
+HW_STATES = ("Working", "Partial", "Detected", "Broken", "Untested", "Parked", "HW-limit", "Deferred")
+HW_OWNED_STATES = {"Working", "HW-limit", "Parked", "Deferred"}   # never flagged unowned (parked/deferred by owner ruling)
+HW_KITS_CACHE = os.path.join(BOARD, "cache", "hw-kits.json")
+HW_KITS_BUDGET_S = 5            # wall time for reading queued window-queue kit packages for bead ids (cached by mtimes)
+HW_KIT_FILES_MAX = 64           # files read per kit package (OPERATOR.md, PREFLIGHT, requests-sealed/*.json, seed-kit/*)
+HW_KIT_READ_MAX = 1 << 20       # bytes read per kit file
+HW_REFS_MAX = 400               # kit paths / generations remembered per anchor from its own comments
+BACKLOG_AREAS_SHOW = 15         # areas listed in the open-backlog table; the rest is one "other" row
+BACKLOG_BUCKETS = (("<1 d", 1), ("1–3 d", 3), ("3–7 d", 7), ("7–14 d", 14), (">14 d", None))
 
 NEEDS_STATES = {"HANDBACK", "BOOT_READY", "BLOCKED", "IDLE", "QUESTION", "MERGE_READY",
                 "DESIGN_READY", "PARTIAL", "DIAG_ONLY"}
@@ -292,6 +325,7 @@ def collect_beads():
             "updated_at": r.get("updated_at"), "created_at": r.get("created_at"),
             "closed_at": r.get("closed_at"), "started_at": r.get("started_at"),
             "comment_count": r.get("comment_count"), "deps": deps,
+            "labels": [x for x in (r.get("labels") or []) if isinstance(x, str)],
         }
     rc, out, errtxt = run_cmd(["bd", "ready", "--json", "-n", "0"], BD_TIMEOUT_S, cwd=MC)
     if rc != 0 or not out.strip():
@@ -1855,6 +1889,523 @@ def classify_beads(index, ready_ids, lanes, comments):
 
 
 # --------------------------------------------------------------------- main --
+# ------------------------------------------------------- hardware & drivers --
+# 2026-10-20 (gpu-14): one row per hardware block and per tier-priority item (hardware-rows.json). A lane posts row
+# evidence as a bd comment on the row's anchor bead whose line reads
+#   HW_ROW state=<Working|Partial|Detected|Broken|Untested|Parked|HW-limit|Deferred> build=<N> evidence=<text>
+# (optional row=<row id> before evidence= when one bead anchors several rows). The latest valid line wins; a row with
+# none shows its seed (seed_state, seed_at). Nothing here writes to beads.
+HW_ROW_RE = re.compile(r"^\s*HW_ROW\s+(.*)$")
+HW_KV_RE = re.compile(r"(?:^|\s)(row|state|build)=(\S+)")
+HW_EV_RE = re.compile(r"(?:^|\s)evidence=")
+HW_STATE_CANON = {s.lower(): s for s in HW_STATES}
+HW_STATE_CANON.update({"hw_limit": "HW-limit", "hwlimit": "HW-limit", "hw-limited": "HW-limit"})
+LANE_SUFFIX_RE = re.compile(r"-(?:g|r)\d+$")
+KIT_REV_RE = re.compile(r"-(?:r|g|v)\d+$")                  # kit revision suffix: ...-M8-r8 is the M8 family
+KIT_PATH_RE = re.compile(r"(?:/home/matt|~)/recovery/[A-Za-z0-9._+/-]+")
+GEN32_RE = re.compile(r"(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])")
+PATHISH_RE = re.compile(r"[^\s\"'=]*/[^\s\"']*")         # a kit's paths name tools/images, not its subject beads
+
+
+def comment_refs(comments):
+    """Kit package paths and 32-hex generations a bead's own comments name, newest first, capped at HW_REFS_MAX each."""
+    paths, gens = [], []
+    for c in sorted(comments or [], key=lambda c: c.get("created_at") or "", reverse=True):
+        t = c.get("text") or ""
+        for p in KIT_PATH_RE.findall(t):
+            p = "/home/matt" + p[1:] if p.startswith("~") else p
+            p = p.rstrip("./,:;-")
+            if p not in paths and len(paths) < HW_REFS_MAX:
+                paths.append(p)
+        for g in GEN32_RE.findall(t):
+            if g not in gens and len(gens) < HW_REFS_MAX:
+                gens.append(g)
+    return {"paths": paths, "gens": gens}
+
+
+def parse_hw_rows(comments):
+    """bd comments rows -> [{at, by, row, state, build, evidence}] for every valid HW_ROW line, oldest first."""
+    out = []
+    for c in comments or []:
+        for line in (c.get("text") or "").splitlines():
+            m = HW_ROW_RE.match(line)
+            if not m:
+                continue
+            body, ev = m.group(1), ""
+            em = HW_EV_RE.search(body)
+            if em:
+                body, ev = body[:em.start()], body[em.end():].strip()
+            kv = dict(HW_KV_RE.findall(body))
+            st = HW_STATE_CANON.get((kv.get("state") or "").strip(",;").lower())
+            if not st:
+                continue
+            out.append({"at": c.get("created_at"), "by": c.get("author"), "row": kv.get("row"), "state": st,
+                        "build": kv.get("build"), "evidence": ev[:600]})
+    out.sort(key=lambda x: x["at"] or "")
+    return out
+
+
+def fetch_comment_rows(bid):
+    rc, out, errtxt = run_cmd(["bd", "comments", bid, "--json"], COMMENTS_TIMEOUT_S, cwd=MC)
+    if rc != 0:
+        return bid, None, f"rc={rc} {errtxt.strip()[:200]}"
+    try:
+        return bid, (json.loads(out) if out.strip() else []), None
+    except Exception as ex:
+        return bid, None, str(ex)
+
+
+def load_hw_doc():
+    with open(HW_ROWS_FILE) as f:
+        doc = json.load(f)
+    if not isinstance(doc.get("rows"), list):
+        raise ValueError(f"{HW_ROWS_FILE}: no rows list")
+    return doc
+
+
+def hw_anchor_ids(doc):
+    ids = []
+    for r in (doc.get("rows") or []) + (doc.get("priorities") or []):
+        for a in r.get("anchor") or []:
+            if a and a not in ids:
+                ids.append(a)
+    return ids
+
+
+def collect_hw_comments(index, ids):
+    """anchor id -> {count, last, hw:[HW_ROW lines], refs:{paths, gens}}; a bead is re-read only when bd list's
+    comment_count moved (or its cache entry predates refs)."""
+    try:
+        with open(HW_COMMENTS_CACHE) as f:
+            cache = json.load(f)
+    except (OSError, ValueError):
+        cache = {}
+    want = [i for i in ids if i in index]
+    # never-read beads first, then the rest; whatever misses HW_COMMENTS_BUDGET_S keeps its cached entry for next time
+    todo = sorted((i for i in want if i not in cache or cache[i].get("count") != index[i].get("comment_count")
+                   or "refs" not in cache[i]),
+                  key=lambda i: i in cache)
+    done = 0
+    if todo:
+        ex = cf.ThreadPoolExecutor(COMMENTS_PARALLEL)
+        futs = [ex.submit(fetch_comment_rows, i) for i in todo]
+        try:
+            for fut in cf.as_completed(futs, timeout=HW_COMMENTS_BUDGET_S):
+                bid, rows, e = fut.result()
+                if e:
+                    err(f"bd comments {bid} (hardware rows)", e)
+                    continue
+                done += 1
+                cache[bid] = {"count": index[bid].get("comment_count"),
+                              "last": max((c.get("created_at") or "" for c in rows), default="") or None,
+                              "hw": parse_hw_rows(rows), "refs": comment_refs(rows)}
+        except cf.TimeoutError:
+            err("bd comments (hardware rows)", f"budget {HW_COMMENTS_BUDGET_S}s spent: {len(todo) - done} of {len(todo)} "
+                                               "anchor comment lists left for the next refresh")
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
+    cache = {i: cache[i] for i in want if i in cache}
+    try:
+        tmp = HW_COMMENTS_CACHE + ".new"
+        with open(tmp, "w") as f:
+            json.dump(cache, f, indent=0, sort_keys=True)
+        os.replace(tmp, HW_COMMENTS_CACHE)
+    except OSError as ex:
+        err("hw comments cache", ex)
+    return cache, done
+
+
+def lane_coverage(lanes):
+    """-> (driving {bead: [lane]}, queued {bead: [lane-queue name]}). Driving: a live (not released, not evidence)
+    lane's admitted bead plus its latest assign-next pop (lane-queue/*.done rows for the lane's run). Queued: the
+    non-comment lines of lane-queue/<lane>.txt (assign-next.sh pops the first)."""
+    driving, queued = {}, {}
+    live = [l for l in lanes if l.get("cls") not in ("released", "evidence")]
+    runs = {l["run"]: l["lane"] for l in live if l.get("run")}
+    for l in live:
+        if l.get("bead"):
+            driving.setdefault(l["bead"], set()).add(l["lane"])
+    last_pop = {}
+    for path in glob.glob(os.path.join(LANE_QUEUE_DIR, "*.done")):
+        try:
+            with open(path, errors="replace") as f:
+                for line in f:
+                    c = line.rstrip("\n").split("\t")
+                    if len(c) < 3 or c[1] not in runs or not c[2].split():
+                        continue
+                    m = BEAD_RE.fullmatch(c[2].split()[0])
+                    if m and (c[1] not in last_pop or c[0] >= last_pop[c[1]][0]):
+                        last_pop[c[1]] = (c[0], m.group(1))
+        except OSError as ex:
+            err("lane-queue", ex)
+    for run, (_ts, bead) in last_pop.items():
+        driving.setdefault(bead, set()).add(runs[run])
+    for path in glob.glob(os.path.join(LANE_QUEUE_DIR, "*.txt")):
+        name = os.path.basename(path)[:-4]
+        try:
+            with open(path, errors="replace") as f:
+                for line in f:
+                    s = line.strip()
+                    if not s or s.startswith("#"):
+                        continue
+                    m = BEAD_RE.fullmatch(s.split()[0])
+                    if m:
+                        queued.setdefault(m.group(1), set()).add(name)
+        except OSError as ex:
+            err("lane-queue", ex)
+    return driving, queued
+
+
+def queued_kits(wq, lanes):
+    """The window-queue kits waiting for or holding the device: every non-comment window-queue.tsv row (position =
+    order among them, 1 = next) plus window-queue.active. -> [{lane, run, gen, label, pkg, position, active}]; lane is
+    the live lane whose run owns the row, else the row's lane family."""
+    by_run = {}
+    for l in lanes:
+        if l.get("run") and (l["run"] not in by_run or l.get("cls") not in ("released", "evidence")):
+            by_run[l["run"]] = l["lane"]
+    kits, pos = [], 0
+    try:
+        with open(wq.get("path") or os.path.join(WQ_BOARD, "window-queue.tsv"), errors="replace") as f:
+            for raw in f:
+                line = raw.rstrip("\n")
+                if not line.strip() or line.lstrip().startswith("#"):
+                    continue
+                pos += 1
+                c = line.split("\t")
+                if len(c) > 5 and c[4].startswith("/"):
+                    kits.append({"lane": by_run.get(c[2]) or c[1], "run": c[2], "gen": c[5], "label": c[7] if len(c) > 7 else "",
+                                 "pkg": c[4].rstrip("/"), "position": pos, "active": False})
+    except OSError as ex:
+        err("window-queue (hardware kits)", ex)
+    a = wq.get("active") or {}
+    if a.get("pkg", "").startswith("/"):
+        kits.insert(0, {"lane": by_run.get(a.get("owner")) or a.get("lane") or "?", "run": a.get("owner"), "gen": a.get("gen") or "",
+                        "label": a.get("label") or "", "pkg": a["pkg"].rstrip("/"), "position": None, "active": True})
+    return kits
+
+
+def kit_files(pkg):
+    fs = [os.path.join(pkg, "OPERATOR.md"), os.path.join(pkg, "PREFLIGHT")]
+    fs += sorted(glob.glob(os.path.join(pkg, "requests-sealed", "*.json")))
+    sk = os.path.join(pkg, "seed-kit")
+    if os.path.isdir(sk):
+        for root, dirs, files in os.walk(sk):
+            dirs.sort()
+            fs += [os.path.join(root, x) for x in sorted(files)]
+            if len(fs) > HW_KIT_FILES_MAX:
+                break
+    else:
+        fs.append(sk)
+    return fs[:HW_KIT_FILES_MAX]
+
+
+def kit_sig(pkg):
+    out = []
+    for p in (pkg, os.path.join(pkg, "OPERATOR.md"), os.path.join(pkg, "PREFLIGHT"), os.path.join(pkg, "requests-sealed"),
+              os.path.join(pkg, "seed-kit")):
+        try:
+            out.append(os.stat(p).st_mtime_ns)
+        except OSError:
+            out.append(None)
+    return out
+
+
+def kit_bead_ids(kits):
+    """pkg -> sorted bead ids the package names: its own path (…/recovery/<bead>/…) and the bare ids (not inside a
+    path such as ~/wt/<bead>/… or another bead's image) in OPERATOR.md, PREFLIGHT, requests-sealed/*.json and
+    seed-kit/*. Cached in
+    HW_KITS_CACHE by the package dir's (and those entries') mtimes; HW_KITS_BUDGET_S caps the reads per refresh."""
+    try:
+        with open(HW_KITS_CACHE) as f:
+            cache = json.load(f)
+    except (OSError, ValueError):
+        cache = {}
+    t0, out, left = time.monotonic(), {}, 0
+    for k in kits:
+        pkg = k["pkg"]
+        if pkg in out:
+            continue
+        sig = kit_sig(pkg)
+        ent = cache.get(pkg)
+        if ent and ent.get("sig") == sig:
+            out[pkg] = ent["ids"]
+            continue
+        if time.monotonic() - t0 > HW_KITS_BUDGET_S:
+            left += 1
+            if ent:
+                out[pkg] = ent["ids"]
+            continue
+        ids = set(BEAD_RE.findall(pkg))
+        for fp in kit_files(pkg):
+            try:
+                with open(fp, "rb") as f:
+                    b = f.read(HW_KIT_READ_MAX)
+            except OSError:
+                continue
+            if b"\0" in b[:4096]:
+                continue
+            ids.update(BEAD_RE.findall(PATHISH_RE.sub(" ", b.decode("utf-8", "replace"))))
+        out[pkg] = sorted(ids)
+        cache[pkg] = {"sig": sig, "ids": out[pkg]}
+    if left:
+        err("hardware kits", f"budget {HW_KITS_BUDGET_S}s spent: {left} kit package(s) not re-read this refresh")
+    try:
+        tmp = HW_KITS_CACHE + ".new"
+        with open(tmp, "w") as f:
+            json.dump({p: cache[p] for p in out if p in cache}, f, indent=0, sort_keys=True)
+        os.replace(tmp, HW_KITS_CACHE)
+    except OSError as ex:
+        err("hw kits cache", ex)
+    return out
+
+
+def kit_family_match(path, pkg):
+    """A comment path names kit pkg when it is pkg (or under it) or the same family: same parent dir, basename equal
+    once a -rN/-gN/-vN revision suffix is dropped (…/peripherals-first-functional-M8-r5 ~ …-M8-r8)."""
+    pc, cc = pkg.split("/"), path.split("/")
+    n = len(pc)
+    if n < 6 or len(cc) < n or cc[:n - 1] != pc[:n - 1]:   # /home/matt/recovery/<bead>/<kit> at least
+        return False
+    return cc[n - 1] == pc[n - 1] or KIT_REV_RE.sub("", cc[n - 1]) == KIT_REV_RE.sub("", pc[n - 1])
+
+
+def kit_cover(kits, kit_ids, index, comments, driving):
+    """-> (named {bead: [kit]}, by_anchor_refs(anchor) -> [kit], batches {label: [member bead]}).
+    named: the bead ids a queued kit's package names (rule b). by_anchor_refs: kits an anchor's own comments name by
+    package path/family or generation (rule b, read from the bead side). batches: batch:<slug> label -> members (rule c)."""
+    named = {}
+    for k in kits:
+        for i in kit_ids.get(k["pkg"]) or []:
+            named.setdefault(i, []).append(k)
+
+    def by_refs(anchor):
+        refs = (comments.get(anchor) or {}).get("refs") or {}
+        gens, paths = set(refs.get("gens") or []), refs.get("paths") or []
+        return [k for k in kits if (k["gen"] and k["gen"] in gens) or any(kit_family_match(p, k["pkg"]) for p in paths)]
+
+    batches = {}
+    for bid, b in index.items():
+        for lab in b.get("labels") or []:
+            if lab.startswith("batch:"):
+                batches.setdefault(lab, []).append(bid)
+    return named, by_refs, batches
+
+
+def child_map(index):
+    """parent -> children, from the parent field and from the dotted id (tsp-x.1.2 is under tsp-x.1)."""
+    kids = collections.defaultdict(set)
+    for bid, b in index.items():
+        if b.get("parent"):
+            kids[b["parent"]].add(bid)
+        if "." in bid:
+            up = bid.rsplit(".", 1)[0]
+            if up in index:
+                kids[up].add(bid)
+    return kids
+
+
+def descendants(roots, kids):
+    seen, todo = set(), list(roots)
+    while todo:
+        for c in kids.get(todo.pop(), ()):
+            if c not in seen and c not in roots:
+                seen.add(c)
+                todo.append(c)
+    return seen
+
+
+def latest_ts(ts_list):
+    best, best_d = None, None
+    for t in ts_list:
+        d = parse_ts(t)
+        if d is not None and (best_d is None or d > best_d):
+            best, best_d = t, d
+    return best
+
+
+def open_sorted(beads):
+    """not-closed beads, best first: priority, in_progress before others, most recently updated."""
+    xs = [b for b in beads if b["status"] not in ("closed", "tombstone")]
+    xs.sort(key=lambda b: b.get("updated_at") or "", reverse=True)
+    xs.sort(key=lambda b: (b["priority"] if isinstance(b.get("priority"), int) else 9, 0 if b["status"] == "in_progress" else 1))
+    return xs
+
+
+def row_kits(anchors, cover, index, driving, kc):
+    """Coverage beyond a lane driving the row's own beads: queued/active window-queue kits (rule b, from the package or
+    from the anchor's comments) and batch:<slug> propagation (rule c). -> (kits [{lane, gen, label, position, active,
+    pkg, bead, via}], batch_lanes [{lane, bead, via}])."""
+    named, by_refs, batches = kc
+    kits, seen, blanes = [], set(), []
+
+    def add(k, bead, via):
+        key = (k["gen"], k["pkg"])
+        if key not in seen:
+            seen.add(key)
+            kits.append({"lane": k["lane"], "gen": k["gen"], "label": k["label"], "position": k["position"],
+                         "active": k["active"], "pkg": k["pkg"], "bead": bead, "via": via})
+
+    for i in sorted(cover):
+        for k in named.get(i, ()):
+            add(k, i, "package")
+    for a in anchors:
+        for k in by_refs(a):
+            add(k, a, "comment")
+    for a in anchors:
+        for lab in sorted(l for l in (index.get(a) or {}).get("labels") or [] if l.startswith("batch:")):
+            for m in sorted(batches.get(lab, ())):
+                if m in cover:
+                    continue
+                for ln in sorted(driving.get(m, ())):
+                    if all(x["lane"] != ln for x in blanes):
+                        blanes.append({"lane": ln, "bead": m, "via": lab})
+                for k in named.get(m, ()):
+                    add(k, m, lab)
+    kits.sort(key=lambda k: (not k["active"], k["position"] or 0))
+    return kits, blanes
+
+
+def hw_row_live(r, index, kids, comments, driving, queued, kc=None):
+    anchors = [a for a in (r.get("anchor") or []) if a]
+    roots = set(anchors)
+    desc = descendants(roots, kids)
+    a_status = [{"id": a, "status": (index.get(a) or {}).get("status") or "missing"} for a in anchors]
+    opens = open_sorted([index[i] for i in desc if i in index])
+    times = [(comments.get(a) or {}).get("last") for a in anchors]
+    for i in roots | desc:
+        b = index.get(i)
+        if b:
+            times += [b.get("updated_at"), b.get("closed_at")]
+    last = latest_ts(times)
+    cover = roots | desc
+    lanes = sorted({l for i in cover for l in driving.get(i, ())})
+    queue = sorted({(l, i) for i in cover for l in queued.get(i, ())})
+    kits, blanes = row_kits(anchors, cover, index, driving, kc) if kc else ([], [])
+    hws = sorted((dict(h, bead=a) for a in anchors for h in (comments.get(a) or {}).get("hw") or []
+                  if h.get("row") in (None, "", r["id"])), key=lambda h: h.get("at") or "")
+    if hws:
+        h = hws[-1]
+        st = {"state": h["state"], "state_source": "hw_row", "build": h.get("build"), "evidence": h.get("evidence"),
+              "evidence_at": h.get("at"), "evidence_by": h.get("by"), "evidence_bead": h["bead"]}
+    else:
+        st = {"state": r.get("seed_state") or "Untested", "state_source": "seed", "build": None,
+              "evidence": r.get("seed_evidence") or "", "evidence_at": (r["seed_at"] + "T00:00:00Z") if r.get("seed_at") else None,
+              "evidence_by": None, "evidence_bead": None}
+    ev_age = age_s(parse_ts(st["evidence_at"]))
+    flags = []
+    if not anchors:
+        flags.append("no_anchor")
+    if st["state"] not in HW_OWNED_STATES and not lanes and not queue and not kits and not blanes:
+        flags.append("unowned")
+    if ev_age is not None and ev_age > HW_EVIDENCE_OLD_D * 86400:
+        flags.append("evidence_old")
+    if anchors and st["state"] not in HW_OWNED_STATES and all(s["status"] == "closed" for s in a_status):
+        flags.append("anchor_closed")
+    out = {k: r.get(k) for k in ("id", "name", "subsystem", "area", "goal", "scope", "driver", "driver_source") if k in r}
+    out.update({"anchor": anchors, "anchor_status": a_status, "open_count": len(opens),
+                "open_top": [{"id": b["id"], "title": b["title"][:120], "status": b["status"], "priority": b["priority"]}
+                             for b in opens[:HW_TOP_OPEN]],
+                "last_activity": last, "last_activity_age_s": age_s(parse_ts(last)), "lanes": lanes,
+                "queued": [{"lane": l, "bead": i} for l, i in queue], "kits": kits, "batch_lanes": blanes,
+                "evidence_age_s": ev_age, "flags": flags,
+                "seed_state": r.get("seed_state"), "seed_at": r.get("seed_at")})
+    out.update(st)
+    return out
+
+
+def build_hardware(index, lanes, comments, doc, wq=None):
+    kids = child_map(index)
+    driving, queued = lane_coverage(lanes)
+    kits = queued_kits(wq or {}, lanes)
+    kc = kit_cover(kits, kit_bead_ids(kits), index, comments, driving)
+    flag_names = ("unowned", "evidence_old", "anchor_closed", "no_anchor")
+
+    def tally(rows):
+        t = {s: sum(1 for x in rows if x["state"] == s) for s in HW_STATES}
+        for x in rows:
+            if x["state"] not in t:
+                t[x["state"]] = t.get(x["state"], 0) + 1
+        return t
+
+    rows = [hw_row_live(r, index, kids, comments, driving, queued, kc) for r in doc.get("rows") or []]
+    hardware = {"rows": rows, "tally": tally(rows), "flags": {f: sum(1 for x in rows if f in x["flags"]) for f in flag_names},
+                "source": HW_ROWS_FILE, "evidence_old_d": HW_EVIDENCE_OLD_D, "kits_scanned": len(kits)}
+    prows = [hw_row_live(p, index, kids, comments, driving, queued, kc) for p in doc.get("priorities") or []]
+    goals, placed = [], set()
+    for g in doc.get("goals") or []:
+        anchors = [a for a in (g.get("anchor") or []) if a]
+        desc = descendants(set(anchors), kids)
+        cover = set(anchors) | desc
+        mem = [p for p in prows if p.get("goal") == g.get("id")]
+        placed.update(id(p) for p in mem)
+        goals.append({"id": g.get("id"), "tier": g.get("tier"), "name": g.get("name"), "why": g.get("why"),
+                      "anchor": anchors,
+                      "anchor_status": [{"id": a, "status": (index.get(a) or {}).get("status") or "missing"} for a in anchors],
+                      "open_count": len(open_sorted([index[i] for i in desc if i in index])),
+                      "lanes": sorted({l for i in cover for l in driving.get(i, ())}),
+                      "tally": {k: v for k, v in tally(mem).items() if v}, "rows": mem})
+    rest = [p for p in prows if id(p) not in placed]
+    if rest:
+        goals.append({"id": "unassigned", "tier": None, "name": "No goal", "why": "goal id not in hardware-rows.json goals",
+                      "anchor": [], "anchor_status": [], "open_count": 0, "lanes": [],
+                      "tally": {k: v for k, v in tally(rest).items() if v}, "rows": rest})
+    priorities = {"goals": goals, "tally": tally(prows),
+                  "flags": {f: sum(1 for x in prows if f in x["flags"]) for f in flag_names}}
+    return hardware, priorities
+
+
+def collect_backlog(index):
+    """Every bead with status open (all scopes): age bucket (created_at) x area (id to two segments), P0/P1, batches."""
+    nb = len(BACKLOG_BUCKETS)
+
+    def bucket(b):
+        a = age_s(parse_ts(b.get("created_at")))
+        if a is None:
+            return nb - 1
+        for i, (_label, lim) in enumerate(BACKLOG_BUCKETS):
+            if lim is None or a < lim * 86400:
+                return i
+        return nb - 1
+
+    opens = [b for b in index.values() if b["status"] == "open"]
+    areas, totals = {}, [0] * nb
+    for b in opens:
+        area = ".".join(b["id"].split(".")[:2])
+        k = bucket(b)
+        a = areas.setdefault(area, {"area": area, "total": 0, "p0": 0, "p1": 0, "counts": [0] * nb})
+        a["total"] += 1
+        a["counts"][k] += 1
+        totals[k] += 1
+        if b.get("priority") == 0:
+            a["p0"] += 1
+        elif b.get("priority") == 1:
+            a["p1"] += 1
+    ranked = sorted(areas.values(), key=lambda a: (-a["total"], a["area"]))
+    shown, rest = ranked[:BACKLOG_AREAS_SHOW], ranked[BACKLOG_AREAS_SHOW:]
+    other = {"areas": len(rest), "total": sum(a["total"] for a in rest), "p0": sum(a["p0"] for a in rest),
+             "p1": sum(a["p1"] for a in rest), "counts": [sum(a["counts"][i] for a in rest) for i in range(nb)]}
+    batches = {}
+    for b in index.values():
+        for lab in b.get("labels") or []:
+            if not lab.startswith("batch:") or len(lab) <= 6:
+                continue
+            g = batches.setdefault(lab[6:], {"batch": lab[6:], "total": 0, "open": 0, "in_progress": 0, "blocked": 0,
+                                             "closed": 0, "other": 0, "_beads": []})
+            g["total"] += 1
+            g[b["status"] if b["status"] in ("open", "in_progress", "blocked", "closed") else "other"] += 1
+            g["_beads"].append(b)
+    out_b = []
+    for g in sorted(batches.values(), key=lambda g: (-(g["total"] - g["closed"]), g["batch"])):
+        g["top"] = [{"id": b["id"], "title": b["title"][:120], "status": b["status"], "priority": b["priority"]}
+                    for b in open_sorted(g.pop("_beads"))[:HW_TOP_OPEN]]
+        out_b.append(g)
+    return {"open_total": len(opens), "p0": sum(1 for b in opens if b.get("priority") == 0),
+            "p1": sum(1 for b in opens if b.get("priority") == 1), "older_14d": totals[-1],
+            "buckets": [label for label, _ in BACKLOG_BUCKETS], "totals": totals, "areas": shown, "other": other,
+            "areas_total": len(areas), "batches": out_b}
+
+
 def main():
     drivers = live_drivers()
     adm = admission_map()
@@ -1893,6 +2444,14 @@ def main():
         except Exception as ex:
             err("comments prefetch", ex)
             beads_box["comments"] = {}
+        # 2026-10-20: hardware rows' anchor comments (HW_ROW tokens), cached by comment_count
+        try:
+            beads_box["hw_doc"] = load_hw_doc()
+            beads_box["hw_comments"], beads_box["hw_fetched"] = collect_hw_comments(
+                beads_box["index"], hw_anchor_ids(beads_box["hw_doc"]))
+        except Exception as ex:
+            err("hardware rows", ex)
+            beads_box["hw_comments"], beads_box["hw_fetched"] = {}, 0
 
     with cf.ThreadPoolExecutor(2) as ex:
         fut_beads = ex.submit(beads_job)
@@ -1922,6 +2481,20 @@ def main():
                       "next": "Re-route to Codex (WT_ID=<bead>-cx, fetch unpushed commits by path), then POST /session/<id>/abort "
                               "so it cannot wake and push; if the lane is another coordinator's, tell them."})
     disp, stale, long_idle, bead_needs, lane_by_bead, owned = classify_beads(index, ready_ids, lanes, beads_box.get("comments") or {})
+    # 2026-10-20: hardware & driver rows, tier priorities, open backlog. Display only: never needs items.
+    hardware, priorities, backlog = {"rows": [], "error": None}, {"goals": []}, None
+    if beads_box.get("hw_doc") is not None and index:
+        try:
+            hardware, priorities = build_hardware(index, lanes, beads_box.get("hw_comments") or {}, beads_box["hw_doc"], wq)
+            hardware["comments_fetched"] = beads_box.get("hw_fetched", 0)
+        except Exception as ex:
+            err("hardware", ex)
+            hardware["error"] = str(ex)[:300]
+    if index:
+        try:
+            backlog = collect_backlog(index)
+        except Exception as ex:
+            err("backlog", ex)
     waited = []
     for n in bead_needs:
         w = wait_for(n.get("bead") or "")
@@ -2015,6 +2588,9 @@ def main():
         "needs_by_kind": {k: sum(1 for n in needs if n["kind"] == k) for k in KIND_RANK},
         "beads_in_scope_in_progress": sum(1 for i, b in index.items() if in_scope(i) and b["status"] == "in_progress"),
         "beads_in_scope_open": sum(1 for i, b in index.items() if in_scope(i) and b["status"] == "open"),
+        "hardware": {"rows": len(hardware.get("rows") or []), "tally": hardware.get("tally") or {},
+                     "flags": hardware.get("flags") or {}},
+        "backlog_open": (backlog or {}).get("open_total"),
     }
     dev.pop("pending_all", None)
     dev.pop("done_rows", None)
@@ -2024,12 +2600,14 @@ def main():
         "runtime_s": round(time.time() - T0, 1),
         "thresholds": {k: v for k, v in globals().items() if k.isupper() and isinstance(v, (int, float, str))
                        and k not in ("G", "MC", "BOARD", "OUT", "CACHE", "OWNER_ASKS", "PFTASK_BIN", "PFTASK_HOME", "NOW", "T0",
-                                     "WQ_BOARD", "KIT_WINDOWS")},
+                                     "WQ_BOARD", "KIT_WINDOWS", "HW_ROWS_FILE", "HW_COMMENTS_CACHE", "HW_KITS_CACHE",
+                                     "LANE_QUEUE_DIR")},
         "campaign_roots": CAMPAIGN_ROOTS,
         "errors": ERRORS, "summary": summary, "needs": needs, "waits": waited, "lanes": lane_rows,
         "released_runs": [{"lane": l["lane"], "run": l["run"], "bead": l.get("bead")} for l in released],
         "prs": prs, "dispatchable": disp, "device": dev, "stale": stale, "long_idle": long_idle,
         "owner_asks": owner, "beads_index": bindex, "owned": owned, "evidence": evidence,
+        "hardware": hardware, "priorities": priorities, "backlog": backlog,
     }
     tmp = OUT + ".new"
     with open(tmp, "w") as f:

@@ -23,7 +23,9 @@ LIVE=${FB_LIVE_DIR:-/home/matt/recovery/gpu14/fleet-board}
 UNIT_DIR=${FB_UNIT_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}
 SYSTEMCTL=${SYSTEMCTL:-systemctl}
 TIMER=pf-fleet-board.timer
-SCRIPTS=(collect.py render.py refresh.sh velocity.py)
+# hardware-rows.json is the committed hardware-row catalog collect.py reads beside itself (HW_ROWS_FILE), so it ships
+# with the scripts.
+SCRIPTS=(collect.py render.py refresh.sh velocity.py hardware-rows.json)
 UNITS=(pf-fleet-board.service pf-fleet-board.timer)
 
 usage() { echo "usage: $0 --check|--apply" >&2; echo "fleet_board_install=fail reason=usage"; exit 2; }

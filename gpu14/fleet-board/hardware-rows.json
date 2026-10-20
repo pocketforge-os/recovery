@@ -1,0 +1,923 @@
+{
+  "schema": 1,
+  "about": "Fleet board hardware and priority rows (owner: gpu-14). Seeded 2026-10-20 from the retired First Functional Build tables of 2026-10-18 (retired-artifacts-20261018/ffb/blocks.json and functional.json) and the tsp-mc9m.60.29 inventory (driver config at kernel 07bb6076, 2026-10-14). Live state comes from HW_ROW comments on each row's anchor bead (see README.md); seed_* fields are the fallback, never edited to report progress.",
+  "driver_basis": "driver and driver_source summarize inventory_driver_config (kernel 07bb6076); read the pinned defconfig and DT before stating a driver fact elsewhere",
+  "states": [
+    "Working",
+    "Partial",
+    "Detected",
+    "Broken",
+    "Untested",
+    "Parked",
+    "HW-limit",
+    "Deferred"
+  ],
+  "rows": [
+    {
+      "id": "display_panel",
+      "name": "Display panel",
+      "subsystem": "Display and graphics",
+      "scope": "Day one",
+      "driver": "sun4i-drm display engine + sun6i-dsi (upstream; A133 patches in sunxi-7.x) · OTM1289A panel (sunxi-7.x)",
+      "driver_source": "upstream + ours",
+      "inventory_driver_config": "DRM_SUN4I, SUN6I_DSI and OTM1289A panel enabled; &dsi okay; panel rotation=90.",
+      "anchor": [
+        "tsp-98733d6399be82e4f00c.5.3"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Gamescope now uses the display card (card0, DSI-1 720x1280 at 60 Hz), proven on Build 15 on 10-16. Whether the panel comes back after a session ends hasn't been re-tested yet."
+    },
+    {
+      "id": "backlight",
+      "name": "Backlight",
+      "subsystem": "Display and graphics",
+      "scope": "Day one",
+      "driver": "pwm-backlight (upstream)",
+      "driver_source": "upstream",
+      "inventory_driver_config": "BACKLIGHT_PWM enabled; pwm-backlight with 20 us period, PH18 enable, 50 ms delay.",
+      "anchor": [
+        "tsp-mc9m.41.923.59"
+      ],
+      "seed_state": "Working",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The backlight was already proven stable in Build 10 captures.",
+      "anchor_note": "gpu-14 2026-10-20: re-anchored from stale 6.x bead tsp-mc9m.41.882 to the 7.x device-proof bead tsp-mc9m.41.923.59"
+    },
+    {
+      "id": "gpu",
+      "name": "GPU (OpenGL ES 3.2)",
+      "subsystem": "Display and graphics",
+      "scope": "Day one",
+      "driver": "powervr DRM (upstream) + Mesa PowerVR Vulkan with Zink (gpu-um-tsp fork) · GE8300 firmware (vendor)",
+      "driver_source": "upstream + ours + vendor fw",
+      "inventory_driver_config": "DRM_POWERVR=m; open Mesa pvr/Zink stack; Build 11 targets GLES 3.2 CTS.",
+      "anchor": [
+        "tsp-mc9m.60.29.1",
+        "tsp-mc9m.41.924.24"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "OpenGL ES 3.2 is exposed. The CTS still has failures and GPU lockups. Fixed on the device on 10-15: storage images (the 11 failing cases now pass, and all 114 regression checks pass with no GPU resets). 10-16: the depth-format runs hit a driver assertion in the depth/stencil copy path; the fix is merged (gpu-um-tsp ca083591), but the rerun on the device hasn't happened yet. GPU resets on narrow buffer copies are still open. 10-18: 11 of the 21 CTS groups pass. For the GPU resets, a study of how stock splits buffer copies found that it never uses the copy shape that resets ours. Two experiments based on it are packaged for one GPU session (at most 3 boots) after the boot fix."
+    },
+    {
+      "id": "g2d",
+      "name": "2D engine (G2D)",
+      "subsystem": "Display and graphics",
+      "scope": "Day one",
+      "driver": "sun8i-rotate (upstream) + A133 G2D driver (sunxi-7.x)",
+      "driver_source": "upstream + ours",
+      "inventory_driver_config": "VIDEO_SUN8I_ROTATE enabled; &g2d_rotate okay; A133-specific driver carried.",
+      "anchor": [
+        "tsp-mc9m.60.29.18",
+        "tsp-mc9m.41.923.78"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Rotate and blit are fixed (a missing memory-bus clock, kernel#91). A small pixel mismatch in the display write-back path is still open."
+    },
+    {
+      "id": "wifi",
+      "name": "Wi-Fi",
+      "subsystem": "Connectivity",
+      "scope": "Day one",
+      "driver": "xradio XR829 (out of tree, carried in sunxi-7.x) · vendor firmware",
+      "driver_source": "out of tree + vendor fw",
+      "inventory_driver_config": "XRADIO=m, CFG80211/MAC80211=m; mmc1 and wifi child enabled with chipid nvmem.",
+      "anchor": [
+        "tsp-mc9m.60.29.2"
+      ],
+      "seed_state": "Working",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Connects to the home network (-28 dBm, 65 Mbit/s), gets an address and carries the test SSH session. Reliability on the move is tested on the real handheld."
+    },
+    {
+      "id": "bluetooth",
+      "name": "Bluetooth",
+      "subsystem": "Connectivity",
+      "scope": "Day one",
+      "driver": "hci_uart serdev for XR829 (carried in sunxi-7.x) · fw_xr829_bt.bin (vendor)",
+      "driver_source": "out of tree + vendor fw",
+      "inventory_driver_config": "BT/HCIUART/XRADIO enabled; serdev child names fw_xr829_bt.bin; 1.5 Mbaud max.",
+      "anchor": [
+        "tsp-mc9m.60.29.3"
+      ],
+      "seed_state": "Detected",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The radio and its firmware now load reliably on a cold boot (10-15). Scanning, pairing, controllers and audio are not tested yet."
+    },
+    {
+      "id": "usb_c",
+      "name": "USB-C (host, gadget, charging)",
+      "subsystem": "Connectivity",
+      "scope": "Day one",
+      "driver": "musb-sunxi + EHCI/OHCI, NCM gadget (upstream)",
+      "driver_source": "upstream",
+      "inventory_driver_config": "MUSB/SUNXI, EHCI0/OHCI0 and gadget NCM enabled; &usb_otg dr_mode=otg, but host-mode override is open.",
+      "anchor": [
+        "tsp-mc9m.60.29.11"
+      ],
+      "seed_state": "Detected",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The USB buses and musb gadget controller are present; no role was exercised. Vendor spec (10-15): there is no Type-C controller. The role comes from the ID pin and the PMIC's VBUS sensing, and our source matches that layout. The host-role override fix is in the last-good image; a bench test of host and gadget is next. 10-18: charging over USB-C is parked for last, and the bench supply can't take a charge."
+    },
+    {
+      "id": "speakers",
+      "name": "Speakers",
+      "subsystem": "Audio",
+      "scope": "Day one",
+      "driver": "sun4i-codec + simple-amplifier (upstream; A133 speaker route ours, kernel#112)",
+      "driver_source": "upstream + ours",
+      "inventory_driver_config": "SUN4I_CODEC and SIMPLE_AMPLIFIER=m; codec okay, but DTS explicitly leaves Speaker Feed unresolved.",
+      "anchor": [
+        "tsp-mc9m.60.29.4"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The playback device appears but no sound has been confirmed yet. Vendor spec (10-15): stock feeds the speaker from the headphone path. 10-18: our driver now uses that fixed route (kernel#112, merged). On the bench a 30-second tone that used to time out played to the end with no dropouts. Whether sound comes out of the speaker is checked with a microphone in the Steam Link audio test. Waits on the boot fix (M7) and a fresh build."
+    },
+    {
+      "id": "microphone",
+      "name": "Microphone",
+      "subsystem": "Audio",
+      "scope": "Day one",
+      "driver": "sun4i-codec (upstream); no board capture route declared",
+      "driver_source": "upstream",
+      "inventory_driver_config": "SUN4I_CODEC=m and codec okay; no board microphone route is declared at 07bb6076.",
+      "anchor": [
+        "tsp-mc9m.60.29.5"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "No capture device appears. Vendor spec (10-15): our driver sets the codec up for playback only. A microphone may not be fitted at all (stock's device tree says no headset mic, and its capture chip never registers). One experiment decides between a fix and a proven hardware limit."
+    },
+    {
+      "id": "headphone_jack",
+      "name": "Headphone jack",
+      "subsystem": "Audio",
+      "scope": "Parked",
+      "driver": "sun4i-codec headphone route + jack detect (upstream)",
+      "driver_source": "upstream",
+      "inventory_driver_config": "Headphone routes and internal jack detect are present.",
+      "anchor": [
+        "tsp-mc9m.41.923.49"
+      ],
+      "seed_state": "Parked",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Parked by the owner. No headphone output appears, as expected for now."
+    },
+    {
+      "id": "gamepad",
+      "name": "Built-in gamepad",
+      "subsystem": "Controls",
+      "scope": "Day one",
+      "driver": "UART3/4 serial (upstream) + pf-gamepad userspace decoder (ours)",
+      "driver_source": "ours",
+      "inventory_driver_config": "UART3/4 enabled; fixed regulator always on; userspace decoder produces pf-gamepad.",
+      "anchor": [
+        "tsp-mc9m.49"
+      ],
+      "seed_state": "Working",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Buttons and sticks appear as one controller (TRIMUI Player1); gamescope maps it as an Xbox pad."
+    },
+    {
+      "id": "function_keys",
+      "name": "FN, MENU and volume keys",
+      "subsystem": "Controls",
+      "scope": "Day one",
+      "driver": "sun4i-lradc-keys (upstream) · MENU via the gamepad's BTN_MODE",
+      "driver_source": "upstream",
+      "inventory_driver_config": "KEYBOARD_SUN4I_LRADC is selected, but 07bb6076 has no enabled LRADC keyboard DT node or key map.",
+      "anchor": [
+        "tsp-mc9m.60.29.26"
+      ],
+      "seed_state": "Detected",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "MENU works: it comes from the gamepad chip as BTN_MODE. No FN key is evidenced on this model. The volume keys use the key controller (LRADC; VOL+ about 646 mV, VOL- about 900 mV), which is now switched on (kernel#98): on 10-18 boots of the last-good image it appears as a key input. A press test is next."
+    },
+    {
+      "id": "vibration",
+      "name": "Vibration motor",
+      "subsystem": "Controls",
+      "scope": "Later",
+      "driver": "none identified (no force-feedback path in DT or defconfig)",
+      "driver_source": "none",
+      "inventory_driver_config": "No ff/rumble implementation is identified in DT or defconfig.",
+      "anchor": [
+        "tsp-mc9m.41.923.5"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "No input device offers rumble yet. Required, but not a day-one gate."
+    },
+    {
+      "id": "power_button",
+      "name": "Power button",
+      "subsystem": "Controls",
+      "scope": "Day one",
+      "driver": "axp20x-pek on the AXP717 (upstream)",
+      "driver_source": "upstream",
+      "inventory_driver_config": "INPUT_AXP20X_PEK enabled via AXP717 MFD.",
+      "anchor": [
+        "tsp-mc9m.60.29.8"
+      ],
+      "seed_state": "Detected",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The AXP power key is present as axp20x-pek, but no press was exercised. Vendor power-sequencing spec written 10-15; a press test is next."
+    },
+    {
+      "id": "hall_sensor",
+      "name": "Hall sensor (purpose unknown)",
+      "subsystem": "Controls",
+      "scope": "Investigate",
+      "driver": "gpio-keys (upstream)",
+      "driver_source": "upstream",
+      "inventory_driver_config": "gpio-keys hall node present and wakeup-source.",
+      "anchor": [
+        "tsp-mc9m.60.29.19"
+      ],
+      "seed_state": "Untested",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Probably unused wiring left from the reference design (about 80% confidence); the stock firmware does not use it."
+    },
+    {
+      "id": "infrared",
+      "name": "Infrared receiver",
+      "subsystem": "Controls",
+      "scope": "Day one",
+      "driver": "sunxi-cir + rc decoders (upstream)",
+      "driver_source": "upstream",
+      "inventory_driver_config": "IR_SUNXI=m and protocol decoders enabled; &r_ir okay.",
+      "anchor": [
+        "tsp-mc9m.60.29.20"
+      ],
+      "seed_state": "Detected",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "rc0 is present, but receiving a signal was not tested."
+    },
+    {
+      "id": "leds",
+      "name": "RGB LEDs (23)",
+      "subsystem": "Controls",
+      "scope": "Day one",
+      "driver": "leds-sun50i-a100 + multicolor class (upstream)",
+      "driver_source": "upstream",
+      "inventory_driver_config": "SUN50I_A100 LED driver and multicolor class enabled; ledc okay with 23 children.",
+      "anchor": [
+        "tsp-mc9m.60.29.16"
+      ],
+      "seed_state": "Detected",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "All 23 rgb:indicator endpoints are present, but visible output was not changed."
+    },
+    {
+      "id": "battery",
+      "name": "Battery and fuel gauge",
+      "subsystem": "Power",
+      "scope": "Real handheld",
+      "driver": "axp20x_battery on the AXP717 (upstream; fixes ours)",
+      "driver_source": "upstream + ours",
+      "inventory_driver_config": "AXP MFD/ADC/BATTERY enabled; battery-power child monitors simple-battery.",
+      "anchor": [
+        "tsp-mc9m.60.29.6"
+      ],
+      "seed_state": "Untested",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Your ruling: tested on your own handheld with a real battery; bench-supply readings prove nothing. 10-16: the battery-safety series is merged: a calibrated 5000 mAh gauge model (kernel#104), low-charge alarms (kernel#106) and an automatic low-battery shutdown (image#274). On a 10-16 test kernel the battery and USB power devices still did not appear, because the power-chip setup ran in the wrong order; it failed safe, and a fix is written but not merged. 10-18: parked for last by your decision. The bench \"battery\" is a lab supply behind a diode, so the bench can't test it; it is tested on your handheld once updates over Wi-Fi work."
+    },
+    {
+      "id": "charger",
+      "name": "Charging",
+      "subsystem": "Power",
+      "scope": "Real handheld",
+      "driver": "axp20x_usb_power on the AXP717 (upstream)",
+      "driver_source": "upstream",
+      "inventory_driver_config": "AXP20X_POWER enabled; usb-power child present.",
+      "anchor": [
+        "tsp-mc9m.60.29.7",
+        "tsp-mc9m.60.29.34",
+        "tsp-mc9m.60.29.43"
+      ],
+      "seed_state": "Parked",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Plugging in a charger at cold boot could shut the device down. 10-16: merged in the battery-safety series: charge limits matching stock (kernel#103; ours had charged at 1984 mA in every state with temperature limits off), plus U-Boot battery protections and a low-battery boot gate (u-boot#56, #57). 10-18: one change in that series set a 3.96 V USB input limit without checking the supply, and that is what stopped new builds from booting. The boot fix (M7) leaves the charger and USB input at their power-on settings, as stock does. Charging is parked for last and is tested on your handheld; the bench can't take a charge. Please don't charge the handheld while it runs our image until then. What it would take to test charging automatically without any battery cells on the bench is written up in tsp-mc9m.60.29.43."
+    },
+    {
+      "id": "suspend_resume",
+      "name": "Suspend and resume",
+      "subsystem": "Power",
+      "scope": "Day one",
+      "driver": "PSCI + cpuidle (upstream) · TF-A",
+      "driver_source": "upstream",
+      "inventory_driver_config": "CPU_IDLE/PSCI enabled; /sys/power states are runtime-dependent.",
+      "anchor": [
+        "tsp-mc9m.60.29.9"
+      ],
+      "seed_state": "Untested",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The kernel advertises freeze and mem, but the probe took no suspend action. Vendor spec (10-15): stock uses the SCP firmware's deep standby. Our trusted firmware has no suspend support yet, so Linux can only use the light freeze state."
+    },
+    {
+      "id": "shutdown",
+      "name": "Shutdown",
+      "subsystem": "Power",
+      "scope": "Day one",
+      "driver": "PSCI SYSTEM_OFF / AXP717 power-off (upstream)",
+      "driver_source": "upstream",
+      "inventory_driver_config": "No single DT node proves shutdown behavior.",
+      "anchor": [
+        "tsp-mc9m.60.29.10"
+      ],
+      "seed_state": "Untested",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "A systemd power-off command exists, but the probe did not shut down. 10-16: the PMIC power-off settings are now preserved through shutdown (kernel#105). Builds 17 and 18 carry it, but neither boots reliably. Waits on the boot fix (M7) and a fresh build."
+    },
+    {
+      "id": "thermal",
+      "name": "Thermal protection",
+      "subsystem": "Power",
+      "scope": "Day one",
+      "driver": "sun8i_thermal + cpu_thermal (upstream)",
+      "driver_source": "upstream",
+      "inventory_driver_config": "THERMAL, CPU_THERMAL, SUN8I_THERMAL enabled; critical-trip hardening tracked.",
+      "anchor": [
+        "tsp-mc9m.60.29.13"
+      ],
+      "seed_state": "Detected",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "CPU, GPU and memory temperatures report. Vendor spec (10-15): stock throttles the CPU at 70 and 80 °C and cuts power at 110 °C; GPU and memory have no trips. A real cooling trip must be proven before CPU speed goes up."
+    },
+    {
+      "id": "cpufreq",
+      "name": "CPU frequency scaling",
+      "subsystem": "Power",
+      "scope": "Day one",
+      "driver": "cpufreq-dt + sun50i-cpufreq-nvmem (upstream) · TCS4838 cpu-supply · OPP table (sunxi-7.x)",
+      "driver_source": "upstream + ours",
+      "inventory_driver_config": "CPUFREQ_DT and SUN50I_CPUFREQ_NVMEM enabled; current OPP table and TCS4838 cpu-supply are wired but omit 2.0 GHz parity.",
+      "anchor": [
+        "tsp-mc9m.60.29.14",
+        "tsp-mc9m.60.29.36"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Target is stock's 2.0 GHz in 9 steps; it waits on thermal protection. 10-16: the boot hang is fixed and merged (kernel#102 adds the missing 1008 MHz step at 1.025 V). On the first proof boot the forced jump was gone and the CPU moved through 408 to 1464 MHz with no hang. The 20-boot soak runs on the next full build. Waits on the boot fix (M7) and a fresh build."
+    },
+    {
+      "id": "sd_card",
+      "name": "SD card",
+      "subsystem": "System",
+      "scope": "Day one",
+      "driver": "sunxi-mmc (upstream)",
+      "driver_source": "upstream",
+      "inventory_driver_config": "MMC_SUNXI enabled; mmc0 okay, cd-gpio, disable-wp.",
+      "anchor": [
+        "tsp-mc9m.60.29.12",
+        "tsp-mc9m.60.29.33"
+      ],
+      "seed_state": "Working",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The card is the boot and root disk. 10-17 bench check on the last-good image: the card was detected, and 64 MiB written and read back matched, with no new storage errors. Fast mode: on 10-16 the card read a full 1 GB at 50 MHz (UHS SDR50) with zero errors, and that support is merged as an opt-in; UHS stays off by default until a reset-safety test passes. The SD errors on newer builds come from a power-chip change (see Charging), not the card."
+    },
+    {
+      "id": "internal_emmc",
+      "name": "Internal storage (eMMC)",
+      "subsystem": "System",
+      "scope": "Day one",
+      "driver": "sunxi-mmc (upstream); no &mmc2 node in our DT",
+      "driver_source": "upstream",
+      "inventory_driver_config": "MMC_SUNXI is enabled, but the 07bb6076 TSP DTS has no &mmc2 node, supply or pin wiring for internal eMMC.",
+      "anchor": [
+        "tsp-mc9m.60.29.25"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Your ruling: the stock OS stays untouched; read-only access only, no installer. Vendor spec (10-15): our device tree doesn't enable the eMMC yet. The plan is to pin the SD card's device name first, then expose the eMMC read-only from the moment it appears, block raw write commands in the kernel, and never automount it."
+    },
+    {
+      "id": "rtc",
+      "name": "Real-time clock",
+      "subsystem": "System",
+      "scope": "Day one",
+      "driver": "rtc-sun6i (upstream)",
+      "driver_source": "upstream",
+      "inventory_driver_config": "RTC_DRV_SUN6I enabled; inherited A100 RTC topology.",
+      "anchor": [
+        "tsp-mc9m.60.29.15"
+      ],
+      "seed_state": "Detected",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "rtc0 supplied system time at boot, but retention across power-off was not tested."
+    },
+    {
+      "id": "crypto_engine",
+      "name": "Crypto engine",
+      "subsystem": "System",
+      "scope": "Day one",
+      "driver": "sun8i-ce (upstream)",
+      "driver_source": "upstream",
+      "inventory_driver_config": "SUN8I_CE hash and PRNG support enabled.",
+      "anchor": [
+        "tsp-mc9m.60.29.21"
+      ],
+      "seed_state": "Detected",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The sun8i engine registers PRNG, hashes, AES and 3DES, but correctness was not compared with software."
+    },
+    {
+      "id": "video_decode",
+      "name": "Video decode (H.264)",
+      "subsystem": "Media",
+      "scope": "Day one",
+      "driver": "cedrus stateless V4L2 decoder (upstream staging)",
+      "driver_source": "upstream",
+      "inventory_driver_config": "CEDRUS enabled; A133 video_engine okay with vpu_cma.",
+      "anchor": [
+        "tsp-mc9m.60.29.17"
+      ],
+      "seed_state": "Detected",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Cedrus is present at /dev/video1 with /dev/media0, but no real Steam Link stream was decoded."
+    },
+    {
+      "id": "video_encode",
+      "name": "Video encode (capture)",
+      "subsystem": "Media",
+      "scope": "Later",
+      "driver": "none (no owned A133 hardware encoder driver)",
+      "driver_source": "none",
+      "inventory_driver_config": "No owned A133 hardware encoder driver/config is identified.",
+      "anchor": [
+        "tsp-mc9m.60.29.46"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "No hardware video encoder appears yet (only decode and rotation). Needed later for capture."
+    }
+  ],
+  "goals": [
+    {
+      "id": "steam_link",
+      "tier": 1,
+      "name": "Steam Link",
+      "anchor": [
+        "tsp-mc9m.41.996"
+      ],
+      "why": "owner 10-14: tier 1; gamescope session, pairing, streaming, input, audio"
+    },
+    {
+      "id": "linux7",
+      "tier": 1,
+      "name": "Linux 7 with all drivers (first functional build)",
+      "anchor": [
+        "tsp-mc9m.60.29"
+      ],
+      "why": "owner 10-14: every driver day one except the parked headphone jack and the later vibration motor; the hardware rows above are this goal's driver half"
+    },
+    {
+      "id": "gles32",
+      "tier": 1,
+      "name": "OpenGL ES 3.2 via Zink",
+      "anchor": [
+        "tsp-mc9m.41.924.24"
+      ],
+      "why": "owner 10-07/10-13: priority #1, Khronos CTS is the checklist; Steam Link may run in parallel"
+    },
+    {
+      "id": "qemu",
+      "tier": 2,
+      "name": "QEMU virtual A133",
+      "anchor": [
+        "tsp-mc9m.41.984.54"
+      ],
+      "why": "owner 10-14: tier 2, spare capacity only; never takes a tier-1 device window or builder slot"
+    },
+    {
+      "id": "later",
+      "tier": null,
+      "name": "Deferred or later",
+      "anchor": [],
+      "why": "owner rulings: Poolsuite and the browser deferred; capture required later; eMMC install left for later"
+    }
+  ],
+  "priorities": [
+    {
+      "id": "gles32_cts",
+      "name": "OpenGL ES 3.2 conformance (Khronos CTS)",
+      "goal": "gles32",
+      "area": "Graphics API",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.41.924.24",
+        "tsp-mc9m.60.29.1"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "OpenGL ES 3.2 is exposed. The CTS still has failures and GPU lockups. Fixed on the device on 10-15: storage images (the 11 failing cases now pass, and all 114 regression checks pass with no GPU resets). 10-16: the depth-format runs hit a driver assertion in the depth/stencil copy path; the fix is merged (gpu-um-tsp ca083591), but the rerun on the device hasn't happened yet. GPU resets on narrow buffer copies are still open. 10-18: 11 of the 21 CTS groups pass. For the GPU resets, a study of how stock splits buffer copies found that it never uses the copy shape that resets ours. Two experiments based on it are packaged for one GPU session (at most 3 boots) after the boot fix."
+    },
+    {
+      "id": "cold_boot_into_pocketforge",
+      "name": "Cold boot into PocketForge",
+      "goal": "linux7",
+      "area": "Boot and setup",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.60.29.29"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Builds 17 and 18, and newer builds from main, don't boot reliably: they stop with SD-card errors. 10-18: the cause is pinned to one power-chip change that set a 3.96 V USB input limit; with that write removed, the same build boots. The boot fix (M7) leaves the power chip at its power-on settings. The last-good image still cold-boots. The 09-30 boot-loader hang (tsp-mc9m.41.990) is still open, and a plain power-button boot of a card you wrote yourself is not tested yet. Waits on the boot fix (M7) and a fresh build. 10-18 evening: the fix (kernel#114) booted on the device at its review head in 97 s, and its review and CI pass. Its merge is waiting on a merge-tool fix for repositories outside automation, which is being made now. Then: pin it, run a whole build, and run acceptance on that build."
+    },
+    {
+      "id": "steam_link_launch_as_a_pf_app",
+      "name": "Steam Link launch as a pf-app",
+      "goal": "steam_link",
+      "area": "Steam Link",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.41.1026.7"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Live tests on Build 15 on 10-16 and 10-17 cleared the launcher's refusals one by one: the symlinked X11 path, a missing display setup step, folder ownership and a sandbox file rule. In the last test Steam Link started but couldn't open the display, because the app lost its display-access group. All fixes merged on 10-17 (runtime#151, launcher#169, image#276) and are in Builds 17 and 18. Waits on the boot fix (M7) and a fresh build."
+    },
+    {
+      "id": "steam_link_pc_pairing",
+      "name": "Steam Link PC pairing",
+      "goal": "steam_link",
+      "area": "Steam Link",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.60.29.27"
+      ],
+      "seed_state": "Untested",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "No receipt yet proves first-time PIN pairing with the owner's PC or that pairing survives an app restart. 10-17: you chose automated PIN entry on the PC (over WinRM); the pairing and controller test is packaged, but its Build 17 windows did not get to run. Waits on the boot fix (M7) and a fresh build."
+    },
+    {
+      "id": "steam_link_720p30_stream",
+      "name": "Steam Link 720p30 stream",
+      "goal": "steam_link",
+      "area": "Steam Link",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-cv7.4.14"
+      ],
+      "seed_state": "Untested",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The app reached its welcome UI, but a five-minute 720p30 Remote Play stream has not run on the owned Linux 7 stack. 10-18: the five-minute stream is part of the packaged Steam Link audio test, which needs a booting build. Waits on the boot fix (M7) and a fresh build."
+    },
+    {
+      "id": "steam_link_controller_input",
+      "name": "Steam Link controller input",
+      "goal": "steam_link",
+      "area": "Steam Link",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.60.29.28"
+      ],
+      "seed_state": "Untested",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Gamescope recognizes the built-in pad, but no intentional button or stick input has been observed at the remote host during a stream. 10-17: that check is packaged with the pairing test. Waits on the boot fix (M7) and a fresh build."
+    },
+    {
+      "id": "steam_link_game_audio",
+      "name": "Steam Link game audio",
+      "goal": "steam_link",
+      "area": "Steam Link",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.60.29.29"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "End-to-end game audio is not proven yet. 10-18: the speaker fix is merged (see Speakers), and a five-minute stream test is packaged with a microphone recording, a muted-speaker check and a sound-to-picture sync check. The first full build with the fix didn't boot. Waits on the boot fix (M7) and a fresh build."
+    },
+    {
+      "id": "steam_link_rotation",
+      "name": "Steam Link rotation",
+      "goal": "steam_link",
+      "area": "Steam Link",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.41.1026.2"
+      ],
+      "seed_state": "Working",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Build 11 gpu, 2026-10-15: camera frames at 10, 30 and 60 seconds show the welcome screen upright, landscape and filling the panel (gamescope 0b03a62e)."
+    },
+    {
+      "id": "session_supervisor",
+      "name": "Session supervisor",
+      "goal": "steam_link",
+      "area": "Session",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-op5a.440.9.1"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "10-16 on Build 15: the display-card fix works, but Xwayland then refused to start and Gamescope aborted. The fix (image#271, merged) was tested live on Build 15 that evening: Gamescope, Xwayland, the shared X socket, the publisher and the resident hold all came up. Builds 17 and 18 carry it built in, but neither boots reliably. Waits on the boot fix (M7) and a fresh build."
+    },
+    {
+      "id": "gamescope_session",
+      "name": "Gamescope session",
+      "goal": "steam_link",
+      "area": "Session",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-op5a.440.9.1"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Same as the session supervisor row: proven live on Build 15 with image#271 staged on 10-16. Builds 17 and 18 carry it but don't boot reliably. Waits on the boot fix (M7) and a fresh build."
+    },
+    {
+      "id": "gamescope_idle_cpu",
+      "name": "Gamescope idle CPU",
+      "goal": "steam_link",
+      "area": "Session",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.41.1026.10"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "On the idle Steam Link welcome screen one gamescope thread kept a whole CPU core busy (101%, Build 10 and Build 11). That costs battery and heat and competes with stream decoding. 10-16: the cause was found (a frame timer was left signalling, so the compositor woke up nonstop) and the fix is merged (gamescope#23). It needs a measurement on a full build. Waits on the boot fix (M7) and a fresh build."
+    },
+    {
+      "id": "post_session_panel_recovery",
+      "name": "Post-session panel recovery",
+      "goal": "steam_link",
+      "area": "Session",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-98733d6399be82e4f00c.5.3"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Gamescope now uses the display card (proven on Build 15, 10-16). Whether the panel comes back after a session ends hasn't been re-tested yet."
+    },
+    {
+      "id": "launcher",
+      "name": "Launcher",
+      "goal": "linux7",
+      "area": "Shell",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-f3fm.202.1"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "A launcher renders, but launching an app and returning to the launcher is incomplete: default apps get no controller input and no way back (tsp-f3fm.202.1). The old tracking bead (tsp-ga7s, superseded 10-03) no longer applies."
+    },
+    {
+      "id": "system_menu",
+      "name": "System menu",
+      "goal": "linux7",
+      "area": "Shell",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-ihne1.17"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The Guide-opened system panel, app section, dialogs, toasts and safe return flow are designed but not shipped. 10-18: the menu renderer it builds on is merged (runtime#158)."
+    },
+    {
+      "id": "on_screen_keyboard_and_input_layer",
+      "name": "On-screen keyboard and input layer",
+      "goal": "linux7",
+      "area": "Input experience",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-ihne1"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The compositor input method, virtual pointer, real-device hand-off and app SDK remain under the tsp-ihne1 implementation epic."
+    },
+    {
+      "id": "wi_fi_setup_ui",
+      "name": "Wi-Fi setup UI",
+      "goal": "linux7",
+      "area": "Connectivity experience",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-ihne1.28"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "There is no shipped menu flow to list, join, inspect or forget wireless networks."
+    },
+    {
+      "id": "bluetooth_pairing_ui",
+      "name": "Bluetooth pairing UI",
+      "goal": "linux7",
+      "area": "Connectivity experience",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-ihne1.31"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The protected Bluetooth service, pairing agent and controller/audio device pages are designed but not shipped."
+    },
+    {
+      "id": "pipewire_audio_server",
+      "name": "PipeWire audio server",
+      "goal": "linux7",
+      "area": "Audio experience",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-ihne1.30"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "PipeWire and WirePlumber do not yet provide the session audio graph needed by local and Bluetooth outputs. 10-16: Build 15 ships neither, nor the ALSA UCM profile data (only alsa-utils)."
+    },
+    {
+      "id": "system_volume",
+      "name": "System volume",
+      "goal": "linux7",
+      "area": "Audio experience",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-ihne1.11"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "10-18: the volume service (pf-volumed) and per-output preferences are merged (runtime#157), and the launcher now carries the matching preference code (launcher#172). The image change that ships them (image#283) is waiting on the same tooling fix as the boot fix. The board has no headphone-detect, so switching outputs is tested with a simulated mixer for now. A follow-up keeps the volume safe when the output switches (tsp-ihne1.14.1)."
+    },
+    {
+      "id": "battery_indicator",
+      "name": "Battery indicator",
+      "goal": "linux7",
+      "area": "Power experience",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.60.29.30"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "10-17: the launcher can now show battery percent, charging state and \"Battery unavailable\" (launcher#168, merged). It hasn't been seen on the device yet; it is checked on your handheld with the parked battery work."
+    },
+    {
+      "id": "power_menu",
+      "name": "Power menu",
+      "goal": "linux7",
+      "area": "Power experience",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.60.29.31"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "10-17: the power menu is built, with confirmations and a protected power service (runtime#152, launcher#170, image#278). Build 18 carries it, but doesn't boot reliably. Waits on the boot fix (M7) and a fresh build."
+    },
+    {
+      "id": "first_boot_seeding",
+      "name": "First-boot seeding",
+      "goal": "linux7",
+      "area": "Boot and setup",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.41.1002.11"
+      ],
+      "seed_state": "Working",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The regression that broke seeded first boots was reverted on 10-12 (cloud-init-tsp#16). 10-16 on Build 15: first boot read the seed files from the card's FAT partition and cloud-init finished with no errors."
+    },
+    {
+      "id": "updates_and_ota",
+      "name": "Updates and OTA",
+      "goal": "linux7",
+      "area": "Lifecycle",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.14.5"
+      ],
+      "seed_state": "Untested",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The self-flash path exists, but a verified Linux 7 Wi-Fi OTA round trip and boot into the written image are still unproven. 10-18: OTA is back on the critical path. Two pending changes (whole-image loads and a guarded flash step) were never proven live; they will be proven together in one bench window. OTA also unlocks the walking Wi-Fi and real-battery tests on your handheld. 10-18 evening: both changes are deployed on the bench runner (power-cycle step, merged, and whole-image flash, merging now). The live proof runs right after the current network-retry test window."
+    },
+    {
+      "id": "application_sandbox",
+      "name": "Application sandbox",
+      "goal": "steam_link",
+      "area": "Security",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-wc8xc.6"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The image#260 and launcher#164 fixes are in Build 15. 10-16 and 10-17 live tests on Build 15: Steam Link's app policy was admitted and applied once the symlinked X11 path and a sandbox file rule were fixed. The last gap, a missing display-access group, is fixed too. All three fixes merged 10-17 (runtime#151, launcher#169, image#276). Waits on the boot fix (M7) and a fresh build."
+    },
+    {
+      "id": "capture_and_instant_replay",
+      "name": "Capture and instant replay",
+      "goal": "later",
+      "area": "Media experience",
+      "scope": "Later",
+      "anchor": [
+        "tsp-mc9m.41.923.62"
+      ],
+      "seed_state": "Deferred",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Screenshots, recording and instant replay remain required later on top of display writeback, but they do not gate Steam Link receive."
+    },
+    {
+      "id": "a133_qemu_tier_2",
+      "name": "A133 QEMU tier 2",
+      "goal": "qemu",
+      "area": "Test infrastructure",
+      "scope": "Later",
+      "anchor": [
+        "tsp-mc9m.41.984.54"
+      ],
+      "seed_state": "Untested",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The virtual A133 boots and renders a menu, but full non-vacuous release-image conformance and remaining device models are tier-two work."
+    },
+    {
+      "id": "pocketforge_browser",
+      "name": "PocketForge Browser",
+      "goal": "later",
+      "area": "Applications",
+      "scope": "Deferred",
+      "anchor": [
+        "tsp-wc8xc"
+      ],
+      "seed_state": "Deferred",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The controller-first WPE browser is an owned product requirement, but it is explicitly deferred past the first Steam Link build."
+    },
+    {
+      "id": "poolsuite",
+      "name": "Poolsuite",
+      "goal": "later",
+      "area": "Applications",
+      "scope": "Deferred",
+      "anchor": [
+        "tsp-f3fm.202"
+      ],
+      "seed_state": "Deferred",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Poolsuite remains a planned default app, but its final device renderer, audio and launcher return path are deferred here."
+    },
+    {
+      "id": "desktop_opengl_and_glx",
+      "name": "Desktop OpenGL and GLX",
+      "goal": "gles32",
+      "area": "Graphics API",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.60.29.32"
+      ],
+      "seed_state": "Broken",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "The current open image deliberately disables GLX and omits desktop libGL, but the owner retained this surface in Q35."
+    },
+    {
+      "id": "install_to_internal_storage",
+      "name": "Install to internal storage",
+      "goal": "later",
+      "area": "Lifecycle",
+      "scope": "Later",
+      "anchor": [
+        "tsp-mc9m.60.29.25"
+      ],
+      "seed_state": "Deferred",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "You chose to leave the stock OS untouched for now; installing to the eMMC may come later."
+    },
+    {
+      "id": "wi_fi_stays_connected_on_the_move",
+      "name": "Wi-Fi stays connected on the move",
+      "goal": "linux7",
+      "area": "Connectivity experience",
+      "scope": "Real handheld",
+      "anchor": [
+        "tsp-mc9m.60.29.2"
+      ],
+      "seed_state": "Untested",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Your ruling: tested on your own handheld, streaming Steam Link while walking around the house. 10-18: this can start once updates over Wi-Fi (OTA) work on the handheld."
+    },
+    {
+      "id": "battery_life_and_reporting",
+      "name": "Battery life and reporting",
+      "goal": "linux7",
+      "area": "Power experience",
+      "scope": "Real handheld",
+      "anchor": [
+        "tsp-mc9m.60.29.6"
+      ],
+      "seed_state": "Untested",
+      "seed_at": "2026-10-18",
+      "seed_evidence": "Your ruling: tested on your own handheld with a real battery; bench readings prove nothing. 10-18: parked for last; it runs on the handheld once OTA works."
+    }
+  ]
+}
