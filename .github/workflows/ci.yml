@@ -18,7 +18,7 @@ jobs:
           scripts/check-vendor.sh
           scripts/test-check-vendor.sh
       - name: Battery probe hermetic controls
-        run: env PATH=/usr/bin:/bin python3 -I tsp-mc9m.60.29.6/test_battery_probe.py
+        run: env PATH=/usr/bin:/bin python3 -B -I tsp-mc9m.60.29.6/test_battery_probe.py
       - name: Test
         run: cargo test --offline --workspace --locked
         working-directory: surface

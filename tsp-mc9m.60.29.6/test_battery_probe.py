@@ -6,8 +6,12 @@ import hashlib
 import importlib.util
 import json
 import pathlib
+import sys
 import tempfile
 import unittest
+
+# Always run the checked-out source: never load or write cached bytecode.
+sys.dont_write_bytecode = True
 
 HERE = pathlib.Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("battery_probe", HERE / "battery_probe.py")
