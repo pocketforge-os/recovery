@@ -376,6 +376,39 @@ def render_stale(d):
     return "".join(parts)
 
 
+# 2026-10-20 (tsp-mc9m.41.1030.55): beads another coordinator drives and parked runs kept only as evidence are not
+# gpu-14's to act on; each gets its own muted group instead of a row in "Needs gpu-14".
+def render_owned(d, who):
+    rows = [o for o in d.get("owned") or [] if o.get("assignee") == who]
+    if not rows:
+        return f'<p class="empty">No in-scope bead without a lane is assigned to {e(who)}.</p>'
+    body = "".join(
+        f'<tr data-filter="{e(o["id"])} {e(o["title"])} {e(o.get("parent"))} {e(who)}"><td>{mono(o["id"])}</td>'
+        f'<td class="num">{e(fmt_age(o.get("age_s")))}</td><td>{e(o.get("status"))}</td><td>{e(o.get("tier") or "–")}</td>'
+        f'<td>{e(o["title"])}<div class="sub">under {mono(o.get("parent"))} · assignee {e(who)}</div></td>'
+        f'<td class="num">{e(short_ts(o.get("updated_at")))}</td></tr>'
+        for o in rows[:STALE_ROWS])
+    more = (f'<details class="more"><summary>{len(rows) - STALE_ROWS} more (data.json owned)</summary><p class="idlist">'
+            + " ".join(mono(o["id"]) for o in rows[STALE_ROWS:]) + "</p></details>") if len(rows) > STALE_ROWS else ""
+    return ('<div class="scroll"><table class="grid"><thead><tr><th>Bead</th><th class="num">Idle</th><th>Status</th>'
+            '<th>Tier</th><th>Title</th><th class="num">Updated</th></tr></thead><tbody>' + body + "</tbody></table></div>" + more)
+
+
+def render_evidence(d):
+    rows = d.get("evidence") or []
+    if not rows:
+        return '<p class="empty">No parked run is kept as evidence (parked.tsv evidence_for=).</p>'
+    body = "".join(
+        f'<tr data-filter="{e(x["lane"])} {e(x.get("run"))} {e(x.get("bead"))} {e(x.get("who"))} {e(x.get("keeper_bead"))}">'
+        f'<td>{mono(x["lane"], "lane")}<div class="sub">{mono(x.get("run"))}</div></td><td>{mono(x.get("bead"))}</td>'
+        f'<td>{e(x.get("who"))}<div class="sub">{"until " + mono(x["keeper_bead"]) + " closes" if x.get("keeper_bead") else "no release bead named"}</div></td>'
+        f'<td class="num" title="since {e(x.get("since"))}">{e(fmt_age(x.get("age_s")))}</td>'
+        f'<td><span class="raw">{e((x.get("reason") or "")[:220])}</span></td></tr>'
+        for x in rows)
+    return ('<div class="scroll"><table class="grid"><thead><tr><th>Lane / run</th><th>Bead</th><th>Kept for</th>'
+            '<th class="num">Parked</th><th>Park reason</th></tr></thead><tbody>' + body + "</tbody></table></div>")
+
+
 def render_owner(d):
     o = d["owner_asks"]
     if o.get("error"):
@@ -771,6 +804,11 @@ def main():
     body.append(f'<section class="strip" aria-label="summary">{strip}</section>')
     body.append(section("needs", "Needs gpu-14 now", s["needs"], render_needs(d),
                         "prioritized: merge-ready, handbacks, boot-ready kits, device, blocked, stale, undriven, newly unblocked"))
+    for who, cnt in (s.get("owned") or {}).items():
+        body.append(section(f"owned-{who}", f"Owned by {who}", cnt, render_owned(d, who),
+                            f"in scope, no lane, assignee {who}: theirs to drive, not gpu-14 needs", open_=False))
+    body.append(section("evidence", "Evidence kept", s.get("lanes_evidence", 0), render_evidence(d),
+                        "parked runs kept as evidence; each returns as a need when its keeper bead closes", open_=False))
     vel = render_velocity(d)
     if vel is not None:
         body.append(section("velocity", "Velocity", vel[1], vel[0],

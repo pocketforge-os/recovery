@@ -39,8 +39,9 @@ data.json schema (top level):
                      last_turn_end, ci_wait:{pr, head, result, ts}, pr, pr_head,
                      reconciler_alive, controller_alive, runtime_alive,
                      native_activity_age_s, worktree, blocker_error,
-                     cls (needs|waiting|running|released|unknown), kind, cls_reason,
-                     next, log, log_mtime, source (log|admission)}]
+                     cls (needs|waiting|running|released|unknown|evidence), kind, cls_reason,
+                     next, log, log_mtime, source (log|admission), evidence:{who, bead}|null}]
+                    (cls evidence: a parked run kept as evidence_for=<who>[:<bead>], see park_condition)
   prs               {"owner/repo#N": {state, merged_at, head, review, draft, title,
                      url, checks:{total, success, pending, failed, failed_names},
                      ci_green, merge_ready, fetched_at, error}}
@@ -64,6 +65,9 @@ data.json schema (top level):
                      last_comment_at, comment_count, age_s}]
   long_idle         {count, ids:[...]}   in_progress in scope, untouched > STALE_LOOKBACK_H
   owner_asks        {count, items:[{num, title}], error}
+  owned             [{id, title, status, assignee, tier, parent, updated_at, age_s, priority}] beads with no lane
+                    assigned to another coordinator (COORD_OWNERS); never needs or stale rows
+  evidence          [{lane, run, bead, who, keeper_bead, reason, since, age_s}] parked runs kept as evidence
   beads_index       {id: {title, status, type, priority}} for every id referenced
 """
 import struct
@@ -80,9 +84,16 @@ import sys
 import time
 
 # ---------------------------------------------------------------- constants --
-G = "/home/matt/recovery/gpu14"
+# 2026-10-20 (tsp-mc9m.41.1030.55): FB_GPU14_DIR points the run at a copy of the gpu14 inputs (hermetic tests,
+# before/after dry runs against a snapshot); unset, it is the live dir.
+G = os.environ.get("FB_GPU14_DIR") or "/home/matt/recovery/gpu14"
 SECONDARY_PR_WINDOW_H = 12  # 2026-10-12: secondary PRs named by a lane within this window are checked for RED CI
 PARK_MAX_H = 12
+# 2026-10-20 (tsp-mc9m.41.1030.55): ~20 rows sat on "Needs gpu-14" for 10+ h and only 2 were gpu-14's. Beads assigned
+# to another coordinator identity are that coordinator's (proc-coord drives its beads through its own subagents, not
+# pf-task lanes): they leave gpu-14's needs and stale rows and show in an "Owned by <who>" group. Any other assignee
+# keeps today's behavior.
+COORD_OWNERS = ("proc-coord",)
 PARKED = {}
 RUN_BOUNDS = {}
 try:
@@ -130,7 +141,7 @@ MC = "/home/matt/mission-control"
 BOARD = os.environ.get("FB_BOARD_DIR") or "/home/matt/recovery/gpu14/fleet-board"
 OUT = os.path.join(BOARD, "data.json")
 CACHE = os.path.join(BOARD, "cache", "run-state.json")
-OWNER_ASKS = "/home/matt/gpu14-owner-questions.md"
+OWNER_ASKS = os.environ.get("FB_OWNER_ASKS") or "/home/matt/gpu14-owner-questions.md"
 RUN_HOME_RESOLVER = "/home/matt/recovery/gpu14/pf-task-run-home"
 
 # Campaign roots: a bead is in scope when its id equals a root or starts with "<root>.".
@@ -1117,8 +1128,105 @@ def fmt_age(s):
     return f"{s / 86400:.1f} d"
 
 
-def classify_lanes(lanes, prs, index, dev):
-    """Set cls/kind/cls_reason/next on each lane; return needs items."""
+# 2026-10-20 (tsp-mc9m.41.1030.55): parks that wait on a date, an owner answer or another lane's verdict resurfaced
+# every PARK_MAX_H, and superseded runs kept only as evidence sat in needs for a day. Typed tokens in the park reason:
+#   until_date=<UTC ISO>              holds until that time
+#   until_owner=Q<n>                  holds while Q<n> is a live item in the owner-asks "## Needs you" section
+#   until_event=gen:<lane>            holds until that lane posts a NEEDS_STATES status after the park, or is released
+#   until_event=ticket:<bead>         holds until that bead changes (updated or closed after the park)
+#   evidence_for=<who>[:<bead>]       an "Evidence kept" row, not a need, until <bead> closes (no bead: PARK_MAX_H)
+# A malformed token, or one whose source cannot be read, keeps PARK_MAX_H resurfacing: a bad park never hides a stall.
+PARK_TOKEN_RE = re.compile(r"(?<![\w-])(until_date|until_owner|until_event|evidence_for)=(\S*)")
+OWNER_DONE_RE = re.compile(r"\b(RESOLVED|ANSWERED)\b")
+PARK_ID_RE = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+
+
+def park_condition(reason, since, index, owner, lanes_by_name):
+    """Typed wake tokens in a parked.tsv reason -> None (no typed token) or
+    {"state": hold|fire|evidence|fallback, "text": why, "evidence": {who, bead}|None}."""
+    toks = PARK_TOKEN_RE.findall(reason or "")
+    if not toks:
+        return None
+    since_d = parse_ts(since)
+    holds, fires, bad, ev, release = [], [], [], None, False
+    for key, raw in toks:
+        val = raw.rstrip(".,;:)")
+        tok = f"{key}={val}"
+        if key == "until_date":
+            d = parse_ts(val) if re.match(r"\d{4}-\d\d-\d\d", val) else None
+            if d is None:
+                bad.append(f"{tok} is not a UTC ISO time")
+            elif NOW >= d:
+                fires.append(f"{tok} has passed")
+            else:
+                holds.append(f"until {iso(d)}")
+        elif key == "until_owner":
+            m = re.fullmatch(r"Q(\d+)", val)
+            if not m:
+                bad.append(f"{tok} is not Q<n>")
+            elif not owner or owner.get("error"):
+                bad.append(f"{tok}: owner asks unreadable ({((owner or {}).get('error') or 'no source')[:80]})")
+            else:
+                live = [i for i in owner.get("items") or [] if i.get("num") == int(m.group(1))
+                        and not OWNER_DONE_RE.search(i.get("title") or "")]
+                if live:
+                    holds.append(f"while owner ask {val} is open")
+                else:
+                    fires.append(f"owner ask {val} is answered (not a live Needs-you item)")
+        elif key == "until_event":
+            m = re.fullmatch(r"(gen|ticket):(" + PARK_ID_RE + ")", val)
+            if not m:
+                bad.append(f"{tok} is not gen:<lane> or ticket:<id>")
+            elif since_d is None:
+                bad.append(f"{tok}: park time unreadable")
+            elif m.group(1) == "gen":
+                ol = lanes_by_name.get(m.group(2))
+                ols = (ol or {}).get("last_status") or {}
+                ol_ts = parse_ts(ols.get("ts"))
+                if ol is None:
+                    bad.append(f"{tok}: lane {m.group(2)} is not on the board")
+                elif ((ol.get("run_info") or {}).get("state")) == "released":
+                    fires.append(f"lane {m.group(2)} is released")
+                elif ols.get("state") in NEEDS_STATES and ol_ts and ol_ts > since_d:
+                    fires.append(f"lane {m.group(2)} posted {ols['state']} at {iso(ol_ts)}")
+                else:
+                    holds.append(f"until lane {m.group(2)} posts a verdict")
+            else:
+                tb = index.get(m.group(2)) if index else None
+                tb_upd = parse_ts((tb or {}).get("updated_at"))
+                if tb is None:
+                    bad.append(f"{tok}: {'bead index unreadable' if not index else 'unknown bead'}")
+                elif tb.get("status") == "closed" or (tb_upd and tb_upd > since_d):
+                    fires.append(f"{m.group(2)} changed ({tb.get('status')}, updated {iso(tb_upd)})")
+                else:
+                    holds.append(f"until {m.group(2)} changes ({tb.get('status')})")
+        else:   # evidence_for
+            m = re.fullmatch(r"(" + PARK_ID_RE + r")(?::(" + PARK_ID_RE + r"))?", val)
+            if not m:
+                bad.append(f"{tok} is not <who>[:<bead>]")
+                continue
+            ev = {"who": m.group(1), "bead": m.group(2)}
+            if not m.group(2):
+                continue    # no release bead: an evidence row while young, then PARK_MAX_H (caller)
+            eb = index.get(m.group(2)) if index else None
+            if eb is None:
+                bad.append(f"{tok}: {'bead index unreadable' if not index else 'unknown bead'}")
+            elif eb.get("status") == "closed":
+                release = True
+                fires.append(f"evidence kept for {m.group(1)} until {m.group(2)}, which is closed")
+    if bad:
+        return {"state": "fallback", "text": "; ".join(bad), "evidence": ev, "release": False}
+    if fires:
+        return {"state": "fire", "text": "; ".join(fires), "evidence": ev, "release": release}
+    if ev:
+        return {"state": "evidence", "text": f"evidence kept for {ev['who']}"
+                + (f" until {ev['bead']} closes" if ev["bead"] else ""), "evidence": ev, "release": False}
+    return {"state": "hold", "text": "; ".join(holds), "evidence": None, "release": False}
+
+
+def classify_lanes(lanes, prs, index, dev, owner=None):
+    """Set cls/kind/cls_reason/next on each lane; return needs items. owner: collect_owner_asks() (until_owner=)."""
+    lanes_by_name = {ln["lane"]: ln for ln in lanes}
     needs = []
     pending_by_sha = {}
     for p in dev.get("pending_all") or []:
@@ -1217,6 +1325,8 @@ def classify_lanes(lanes, prs, index, dev):
         # A park reason carrying `until_pr=<owner/repo#N>` holds while that PR is open and becomes a need once it merges.
         pk_pr = re.search(r"until_pr=([\w.-]+/[\w.-]+#\d+)", pk[1]).group(1) if pk and re.search(r"until_pr=([\w.-]+/[\w.-]+#\d+)", pk[1]) else None
         pk_pri = prs.get(pk_pr) if pk_pr else None
+        pk_cond = park_condition(pk[1], pk[0], index, owner, lanes_by_name) if pk else None
+        pk_bad = f" (wake condition unreadable: {pk_cond['text']})" if pk_cond and pk_cond["state"] == "fallback" else ""
         if pk and rs != "released" and not ln["driver_alive"] and pk_pri and pk_pri.get("state") in ("MERGED", "CLOSED"):
             need("unblocked", f"parked until {pk_pr}, which is {pk_pri.get('state')} ({pk_pri.get('merged_at') or ''}): {pk[1]}",
                  "Resume the lane on the merged change and unpark it (edit parked.tsv).")
@@ -1224,10 +1334,20 @@ def classify_lanes(lanes, prs, index, dev):
             wait(f"parked until {pk_pr} merges ({fmt_age(pk_age)} ago): {pk[1]}")
         elif pk and rs != "released" and not ln["driver_alive"] and pk_hold:
             wait(f"parked until {pk_bead} closes ({fmt_age(pk_age)} ago): {pk[1]}")
+        elif pk and rs != "released" and not ln["driver_alive"] and pk_cond and pk_cond["state"] == "fire":
+            need("unblocked", f"parked ({fmt_age(pk_age)} ago); its wake condition fired: {pk_cond['text']}: {pk[1]}",
+                 "The evidence is no longer needed: release the run (release-run.sh) and drop its parked.tsv row."
+                 if pk_cond["release"] else "Act on the event, then resume the lane or re-park it with a new condition (edit parked.tsv).")
+        elif pk and rs != "released" and not ln["driver_alive"] and pk_cond and pk_cond["state"] == "evidence" \
+                and (pk_cond["evidence"]["bead"] or (pk_age is not None and pk_age < PARK_MAX_H * 3600)):
+            cls, kind, why, nxt = "evidence", None, f"{pk_cond['text']} (parked {fmt_age(pk_age)} ago): {pk[1]}", ""
+            ln["evidence"] = dict(pk_cond["evidence"])
+        elif pk and rs != "released" and not ln["driver_alive"] and pk_cond and pk_cond["state"] == "hold":
+            wait(f"parked {pk_cond['text']} ({fmt_age(pk_age)} ago): {pk[1]}")
         elif pk and rs != "released" and not ln["driver_alive"] and pk_age is not None and pk_age < PARK_MAX_H * 3600:
-            wait(f"parked {fmt_age(pk_age)} ago: {pk[1]}")
+            wait(f"parked {fmt_age(pk_age)} ago{pk_bad}: {pk[1]}")
         elif pk and rs != "released" and not ln["driver_alive"]:
-            need("stale", f"parked longer than {PARK_MAX_H} h: {pk[1]}", "Re-check the park reason; unpark (edit parked.tsv) or act.")
+            need("stale", f"parked longer than {PARK_MAX_H} h{pk_bad}: {pk[1]}", "Re-check the park reason; unpark (edit parked.tsv) or act.")
         elif rs == "released":
             cls, why = "released", "run released"
         elif rs == "busy":
@@ -1374,7 +1494,9 @@ def classify_lanes(lanes, prs, index, dev):
                 and mt >= bnd - 4 and rs not in ("released", None) and not budget_ack:
             need("budget", f"messages {mt}/{bnd}: the next sends hit session_message_budget_exhausted",
                  "Rotate now: ask for a pushed-head handoff on the bead, then dispatch the next generation.")
-        if cls not in ("needs", "released") and not (pk and ((pk_age is not None and pk_age < PARK_MAX_H * 3600) or pk_hold)):
+        pk_typed_hold = cls in ("waiting", "evidence") and bool(pk_cond) and pk_cond["state"] in ("hold", "evidence")
+        if cls not in ("needs", "released") and not (pk and ((pk_age is not None and pk_age < PARK_MAX_H * 3600) or pk_hold
+                                                             or pk_typed_hold)):
             for spr in ln.get("secondary_prs") or []:
                 spi = prs.get(spr)
                 if spi and not spi.get("error") and spi.get("state") == "OPEN" and spi["checks"]["failed"] \
@@ -1549,7 +1671,7 @@ def stale_candidates(index, lane_by_bead):
     for bid, b in index.items():
         if not in_scope(bid) or b["status"] != "in_progress" or b["type"] in NON_DISPATCH_TYPES:
             continue
-        if bid in lane_by_bead:
+        if bid in lane_by_bead or b.get("assignee") in COORD_OWNERS:   # another coordinator's: owned_beads()
             continue
         a = age_s(parse_ts(b["updated_at"]))
         if a is None:
@@ -1560,6 +1682,21 @@ def stale_candidates(index, lane_by_bead):
             cands.append(b)
     cands.sort(key=lambda b: b["updated_at"])
     return cands, long_idle
+
+
+def owned_beads(index, lane_by_bead):
+    """2026-10-20 (tsp-mc9m.41.1030.55): in-scope, not-closed beads with no lane whose assignee is another coordinator
+    (COORD_OWNERS). They are that coordinator's to drive, so they are listed with their age instead of being needs."""
+    out = []
+    for bid, b in index.items():
+        if not in_scope(bid) or b.get("assignee") not in COORD_OWNERS or b["status"] not in ("in_progress", "open") \
+                or b["type"] in NON_DISPATCH_TYPES or bid in lane_by_bead:
+            continue
+        out.append({"id": bid, "title": b["title"][:160], "status": b["status"], "assignee": b["assignee"],
+                    "tier": b["tier"], "parent": b.get("parent"), "updated_at": b["updated_at"],
+                    "age_s": age_s(parse_ts(b["updated_at"])), "priority": b["priority"]})
+    out.sort(key=lambda o: (o["assignee"], 0 if o["status"] == "in_progress" else 1, -(o["age_s"] or 0)))
+    return out
 
 
 def fetch_comments_for(ids):
@@ -1589,6 +1726,8 @@ def classify_beads(index, ready_ids, lanes, comments):
             excluded += 1
             continue
         if bid in lane_by_bead:
+            continue
+        if b.get("assignee") in COORD_OWNERS:   # another coordinator's to dispatch: owned_beads()
             continue
         sb = slim_bead(b, index, lane_by_bead)
         sb["recent"] = (age_s(parse_ts(b["updated_at"])) or 1e12) < RECENT_DAYS * 86400 or \
@@ -1680,7 +1819,8 @@ def classify_beads(index, ready_ids, lanes, comments):
                       "reason": f"newly unblocked by {', '.join(nb['unblocked_by'])} (closed {nb['unblocked_at']}); open, no lane",
                       "since": nb["unblocked_at"], "age_s": age_s(parse_ts(nb["unblocked_at"])),
                       "next": "Dispatch a worker (kickoff) or record why it waits.", "bead_title": nb["title"]})
-    return disp, stale, {"count": len(long_idle), "ids": sorted(long_idle)}, needs, lane_by_bead
+    return disp, stale, {"count": len(long_idle), "ids": sorted(long_idle)}, needs, lane_by_bead, \
+        owned_beads(index, lane_by_bead)
 
 
 # --------------------------------------------------------------------- main --
@@ -1739,7 +1879,8 @@ def main():
     index, ready_ids = beads_box["index"], beads_box["ready"]
     dev = collect_device()
     wq = dev["window_queue"]
-    needs = classify_lanes(lanes, prs, index, dev)
+    owner = collect_owner_asks()
+    needs = classify_lanes(lanes, prs, index, dev, owner=owner)
     needs += classify_device(dev)
     needs += classify_host()
     for q in collect_model_quota():
@@ -1749,7 +1890,7 @@ def main():
                       "since": None, "age_s": None,
                       "next": "Re-route to Codex (WT_ID=<bead>-cx, fetch unpushed commits by path), then POST /session/<id>/abort "
                               "so it cannot wake and push; if the lane is another coordinator's, tell them."})
-    disp, stale, long_idle, bead_needs, lane_by_bead = classify_beads(index, ready_ids, lanes, beads_box.get("comments") or {})
+    disp, stale, long_idle, bead_needs, lane_by_bead, owned = classify_beads(index, ready_ids, lanes, beads_box.get("comments") or {})
     waited = []
     for n in bead_needs:
         w = wait_for(n.get("bead") or "")
@@ -1775,10 +1916,14 @@ def main():
     for n in needs:
         n["rank"] = KIND_RANK.get(n["kind"], 9)
     needs.sort(key=lambda n: (n["rank"], -(n["age_s"] or 0)))
-    owner = collect_owner_asks()
 
     shown = [l for l in lanes if l.get("cls") != "released"]
     released = [l for l in lanes if l.get("cls") == "released"]
+    evidence = [{"lane": l["lane"], "run": l["run"], "bead": l.get("bead"), "who": l["evidence"]["who"],
+                 "keeper_bead": l["evidence"]["bead"], "reason": (PARKED.get(l["run"] or "") or ("", ""))[1][:300],
+                 "since": (PARKED.get(l["run"] or "") or (None,))[0],
+                 "age_s": age_s(parse_ts((PARKED.get(l["run"] or "") or (None,))[0]))}
+                for l in shown if l.get("cls") == "evidence"]
     refd = set()
     for ln in shown:
         if ln.get("bead"):
@@ -1794,10 +1939,12 @@ def main():
         if p.get("parent"):
             refd.add(p["parent"])
         refd.update(x["id"] for x in p["blockers"])
-    for s in stale:
+    for s in stale + owned:
         refd.add(s["id"])
         if s.get("parent"):
             refd.add(s["parent"])
+    for x in evidence:
+        refd.update(i for i in (x["bead"], x["keeper_bead"]) if i)
     bindex = {i: {"title": index[i]["title"][:160], "status": index[i]["status"], "type": index[i]["type"],
                   "priority": index[i]["priority"]} for i in refd if i in index}
 
@@ -1810,7 +1957,7 @@ def main():
             "last_event_at", "last_turn_end", "ci_wait", "pr", "pr_head", "reconciler_alive", "controller_alive",
             "runtime_alive", "native_activity_age_s", "messages_total", "worktree", "blocker_error", "runtime_parked",
             "cls", "kind", "cls_reason", "next", "log", "log_mtime", "source", "status_age_s", "session_id",
-            "window_queue")})
+            "window_queue", "evidence")})
     summary = {
         "needs": len(needs),
         "lanes_total": len(shown),
@@ -1818,6 +1965,8 @@ def main():
         "lanes_waiting": sum(1 for l in shown if l["cls"] == "waiting"),
         "lanes_needs": sum(1 for l in shown if l["cls"] == "needs"),
         "lanes_unknown": sum(1 for l in shown if l["cls"] == "unknown"),
+        "lanes_evidence": len(evidence),
+        "owned": {w: sum(1 for o in owned if o["assignee"] == w) for w in COORD_OWNERS},
         "lanes_released_hidden": len(released),
         "dispatchable": disp["parallel_total"] + len(disp["newly_unblocked"]),
         "dispatchable_recent": disp["parallel_recent_total"] + len(disp["newly_unblocked"]),
@@ -1849,7 +1998,7 @@ def main():
         "errors": ERRORS, "summary": summary, "needs": needs, "waits": waited, "lanes": lane_rows,
         "released_runs": [{"lane": l["lane"], "run": l["run"], "bead": l.get("bead")} for l in released],
         "prs": prs, "dispatchable": disp, "device": dev, "stale": stale, "long_idle": long_idle,
-        "owner_asks": owner, "beads_index": bindex,
+        "owner_asks": owner, "beads_index": bindex, "owned": owned, "evidence": evidence,
     }
     tmp = OUT + ".new"
     with open(tmp, "w") as f:

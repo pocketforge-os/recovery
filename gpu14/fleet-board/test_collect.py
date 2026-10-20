@@ -269,7 +269,7 @@ class RenderGroups(unittest.TestCase):
     def test_owned_group_renders(self):
         html_ = render.render_owned(self.D, "proc-coord")
         self.assertIn("tsp-mc9m.41.1030.28", html_)
-        self.assertIn("16.0 h", html_)
+        self.assertIn(">16h00<", html_)
 
     def test_evidence_group_renders(self):
         html_ = render.render_evidence(self.D)
