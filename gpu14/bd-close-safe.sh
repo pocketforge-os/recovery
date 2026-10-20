@@ -10,14 +10,18 @@
 # visible here (pf-task worktree.inspect is role_refused for coordinator/observer/owner-admin).
 # usage: bd-close-safe.sh [--check] <bead> <reason...>     (--check: report only, never close)
 set -uo pipefail
-R=/home/matt/recovery/gpu14
+# 2026-10-20 (tsp-mc9m.41.995.130.3): every hardcoded root is env-overridable (defaults = the live paths) so
+# gpu14/tests/bd-close-safe-test.sh can run hermetically against temp roots, a fake bd and a fake pf-task.
+R=${GPU14_ROOT:-/home/matt/recovery/gpu14}
+WT=${BD_CLOSE_SAFE_WT_ROOT:-/home/matt/wt}
+MC=${BD_CLOSE_SAFE_MC:-/home/matt/mission-control}
 check=0; [ "${1:-}" = --check ] && { check=1; shift; }
 bead=${1:?usage: bd-close-safe.sh [--check] <bead> <reason...>}; shift
 [ "$check" = 1 ] || [ "$#" -gt 0 ] || { echo "BD_CLOSE_SAFE_REFUSED reason=missing_close_reason"; exit 2; }
-cands=$(python3 - "$R" "$bead" <<'PY'
+cands=$(python3 - "$R" "$bead" "$WT" <<'PY'
 import json, pathlib, sys
-r, bead = pathlib.Path(sys.argv[1]), sys.argv[2]
-roots = (f"/home/matt/wt/{bead}/", f"/home/matt/wt/{bead}-")
+r, bead, wt_root = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+roots = (f"{wt_root}/{bead}/", f"{wt_root}/{bead}-")
 seen = set()
 for adm in sorted(r.glob("admission-*.json")):
     run_file = r / ("run-" + adm.name[len("admission-"):])
@@ -48,7 +52,7 @@ done <<< "$cands"
 # 2026-10-14: closing .1026.3.1 removed browser-eval's worker tree /home/matt/wt/tsp-mc9m.41.1026.3.1/runtime. Sets with
 # NO gpu-14 admission are other coordinators' (invisible to worktree.inspect): refuse unless --foreign-ok names why.
 mapped=$(printf '%s\n' "$cands" | awk 'NF{print $2}')
-for set in /home/matt/wt/"$bead" /home/matt/wt/"$bead"-* /home/matt/wt/mc-"$bead"; do
+for set in "$WT"/"$bead" "$WT"/"$bead"-* "$WT"/mc-"$bead"; do
   [ -e "$set" ] || continue
   if ! printf '%s\n' "$mapped" | grep -q "^$set/"; then
     if [ -z "${BD_CLOSE_FOREIGN_OK:-}" ]; then
@@ -64,4 +68,4 @@ if [ "$blocked" -gt 0 ]; then
   exit 3
 fi
 [ "$check" = 1 ] && { echo "BD_CLOSE_SAFE_CHECK_OK bead=$bead"; exit 0; }
-cd /home/matt/mission-control && bd close "$bead" --reason "$*"
+cd "$MC" && bd close "$bead" --reason "$*"
