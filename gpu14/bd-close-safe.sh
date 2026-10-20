@@ -116,8 +116,11 @@ for w in "${wims[@]}"; do
   spec=${w#work_in_main=}; sha=${spec##*@}; repo=${spec%@*}; repo=${repo##*/}; dir=$SRC/$repo
   git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || not_in_main "$spec" repo_missing
   timeout 120 git -C "$dir" fetch -q origin >/dev/null 2>&1 || not_in_main "$spec" fetch_failed
-  def=$(git -C "$dir" symbolic-ref -q refs/remotes/origin/HEAD) \
-    || { for b in main master; do git -C "$dir" rev-parse -q --verify "refs/remotes/origin/$b" >/dev/null && { def=refs/remotes/origin/$b; break; }; done; }
+  # The default branch is read from the remote NOW: fetch never refreshes the cached refs/remotes/origin/HEAD (review #21).
+  head=$(timeout 120 git -C "$dir" ls-remote --symref origin HEAD 2>/dev/null) || not_in_main "$spec" origin_head_unresolved
+  b=$(printf '%s\n' "$head" | awk '$1 == "ref:" && $3 == "HEAD" {sub("^refs/heads/", "", $2); print $2; exit}')
+  if [ -n "$b" ]; then def=refs/remotes/origin/$b; git -C "$dir" rev-parse -q --verify "$def" >/dev/null || not_in_main "$spec" "default_branch_not_fetched of=origin/$b"
+  else for b in main master; do git -C "$dir" rev-parse -q --verify "refs/remotes/origin/$b" >/dev/null && { def=refs/remotes/origin/$b; break; }; done; fi
   [ -n "${def:-}" ] || not_in_main "$spec" no_origin_default_branch
   git -C "$dir" merge-base --is-ancestor "$sha" "$def" 2>/dev/null || not_in_main "$spec" "not_ancestor of=${def#refs/remotes/}"
   echo "BD_CLOSE_SAFE work_in_main=$spec ancestor_of=${def#refs/remotes/}"; unset def

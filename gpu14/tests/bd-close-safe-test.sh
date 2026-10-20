@@ -49,6 +49,11 @@ LANDED=$(git -C "$SRC/src" rev-parse HEAD)
 git -C "$SRC/src" switch -q -c side; git -C "$SRC/src" -c user.email=t@t -c user.name=t commit -q --allow-empty -m unlanded
 UNLANDED=$(git -C "$SRC/src" rev-parse HEAD); git -C "$SRC/src" switch -q main
 git clone -q "$TMP/origin.git" "$SRC/nofetch"; git -C "$SRC/nofetch" remote set-url origin "$TMP/no-such-origin.git"
+# moved: the remote default branch moved from old to main after the clone; the cached origin/HEAD still says old.
+git -C "$TMP/seed" switch -q -c old; git -C "$TMP/seed" -c user.email=t@t -c user.name=t commit -q --allow-empty -m old-only
+OLDONLY=$(git -C "$TMP/seed" rev-parse HEAD); git -C "$TMP/seed" switch -q main
+git clone -q --bare "$TMP/seed" "$TMP/moved.git"; git -C "$TMP/moved.git" symbolic-ref HEAD refs/heads/old
+git clone -q "$TMP/moved.git" "$SRC/moved"; git -C "$TMP/moved.git" symbolic-ref HEAD refs/heads/main
 
 admit() { # name run_id task worktree state
   printf '{"run_id":"%s"}\n' "$2" > "$GPU/admission-$1.json"
@@ -168,7 +173,8 @@ expect 'close: kept run with no reason refuses before any lookup' 2 "BD_CLOSE_SA
 for spec in "non-ancestor sha|work_in_main=src@$UNLANDED|not_ancestor" \
             "fetch failure|work_in_main=nofetch@$LANDED|fetch_failed" \
             "missing repo dir|work_in_main=pocketforge-os/absent@$LANDED|repo_missing" \
-            "one bad of two|$WIM work_in_main=src@$UNLANDED|not_ancestor"; do
+            "one bad of two|$WIM work_in_main=src@$UNLANDED|not_ancestor" \
+            "stale cached origin/HEAD|work_in_main=moved@$OLDONLY|not_ancestor of=origin/main"; do
   IFS='|' read -r name wim detail <<<"$spec"
   run_case --keep-for-run $RK tsp-k "unreleased_run=$RK $wim release_tracked_by=tsp-rel"
   [ "$rc" = 3 ] && grep -q "^BD_CLOSE_SAFE_REFUSED reason=work_not_in_main bead=tsp-k .*detail=$detail" <<<"$out" && [ "$(nbd)" = 0 ] \
