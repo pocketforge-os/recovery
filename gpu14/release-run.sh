@@ -12,7 +12,9 @@
 # Any failed step stops before pf-wt rm and prints why.
 # Single-worktree mode (2026-10-04): if /home/matt/wt/<bead> is ITSELF a linked worktree (a .git FILE),
 # e.g. a `bd worktree create` Mission Control tree, it is checked as one repo and removed with
-# `bd worktree remove <name>` (mission-control) or `git worktree remove` (other repos), not pf-wt rm.
+# `bd worktree remove <exact path>` (mission-control) or `git worktree remove` (other repos), not pf-wt rm.
+# 2026-10-20 (tsp-mc9m.41.1030.62): the exact path, never the basename; the bd shim refuses a bare name, which upstream
+# bd resolves to the first registered worktree with that basename (possibly another worker's tree).
 # Superseded work (e.g. a reviewer tree pinned to a pre-force-push head): SUPERSEDED_BY=<owner/repo#N |
 # 40-hex commit | bead> SUPERSEDE_REASON=<text> skips ONLY this script's landed check and passes pf-task's
 # audited `supersede` to run.release, which itself refuses unless the tree is clean and HEAD is exactly on
@@ -288,7 +290,7 @@ if [ "$NOWT" = 1 ]; then
 elif [ "$SINGLE" = 1 ]; then
   common=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)
   if [ "$common" = /home/matt/mission-control/.git ]; then
-    (cd /home/matt/mission-control && bd worktree remove "$(basename "$ROOT")" 2>&1 | tail -3)
+    (cd /home/matt/mission-control && bd worktree remove "$ROOT" 2>&1 | tail -3)
   else
     git -C "$ROOT" worktree remove "$ROOT" 2>&1 | tail -3
   fi
