@@ -12,7 +12,9 @@
 # Any failed step stops before pf-wt rm and prints why.
 # Single-worktree mode (2026-10-04): if /home/matt/wt/<bead> is ITSELF a linked worktree (a .git FILE),
 # e.g. a `bd worktree create` Mission Control tree, it is checked as one repo and removed with
-# `bd worktree remove <name>` (mission-control) or `git worktree remove` (other repos), not pf-wt rm.
+# `bd worktree remove <exact path>` (mission-control) or `git worktree remove` (other repos), not pf-wt rm.
+# 2026-10-20 (tsp-mc9m.41.1030.62): the exact path, never the basename; the bd shim refuses a bare name, which upstream
+# bd resolves to the first registered worktree with that basename (possibly another worker's tree).
 # Superseded work (e.g. a reviewer tree pinned to a pre-force-push head): SUPERSEDED_BY=<owner/repo#N |
 # 40-hex commit | bead> SUPERSEDE_REASON=<text> skips ONLY this script's landed check and passes pf-task's
 # audited `supersede` to run.release, which itself refuses unless the tree is clean and HEAD is exactly on
@@ -23,7 +25,8 @@
 # by a git bundle under ~/recovery/release-preserved; the bundle is pre-checked here (regular file, no symlink,
 # sha256) and fully verified by pf-task. It implies KEEP_WORKTREE=1. After every release the run.status receipt is
 # read back: kept paths / bundle sha256 that differ from the request (or an unrequested keep) exit 5
-# RELEASE_RECEIPT_MISMATCH and remove nothing.
+# RELEASE_RECEIPT_MISMATCH and remove nothing. A remover that fails after the release exits 6
+# (WORKTREE_REMOVE_FAILED; the run IS released).
 set -u
 RUN=$1; BEAD=$2; DEF=${3:-}
 WT_BASE=${PF_RELEASE_WT_BASE:-/home/matt/wt}
@@ -283,20 +286,31 @@ if [ "$KEEP" = 1 ]; then
   echo "worktrees KEPT at $ROOT (receipt retention=kept paths=${#KEPT_PATHS[@]}${PRES_SHA:+ bundle_sha256=$PRES_SHA})"
   exit 0
 fi
+# 2026-10-20 (review on recovery#26, tsp-mc9m.41.1030.62): every remover's status propagates. A refusal after the
+# release (e.g. the removal guard's ownership_unproven) used to be swallowed by `| tail` and exit 0 with the tree left
+# behind; now it prints WORKTREE_REMOVE_FAILED and the script exits 6 (the run IS released).
+cleanup_failed=0
+remove_step() {  # remover argv...: run it, show its tail, record a nonzero status
+  local out rc
+  out=$("$@" 2>&1); rc=$?
+  [ -z "$out" ] || printf '%s\n' "$out" | tail -3
+  [ "$rc" = 0 ] || { echo "WORKTREE_REMOVE_FAILED rc=$rc cmd=$1 (run IS released)"; cleanup_failed=1; }
+}
 if [ "$NOWT" = 1 ]; then
   echo "no worktree to remove"
 elif [ "$SINGLE" = 1 ]; then
   common=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)
   if [ "$common" = /home/matt/mission-control/.git ]; then
-    (cd /home/matt/mission-control && bd worktree remove "$(basename "$ROOT")" 2>&1 | tail -3)
+    remove_step bd -C /home/matt/mission-control worktree remove "$ROOT"
   else
-    git -C "$ROOT" worktree remove "$ROOT" 2>&1 | tail -3
+    remove_step git -C "$ROOT" worktree remove "$ROOT"
   fi
-  [ -e "$ROOT" ] && echo "WORKTREE_REMOVE_FAILED path=$ROOT (run IS released)" || echo "removed worktree $ROOT"
+  if [ -e "$ROOT" ]; then echo "WORKTREE_REMOVE_FAILED path=$ROOT (run IS released)"; cleanup_failed=1; else echo "removed worktree $ROOT"; fi
 elif [ "$ROOT" = "$WT_BASE/$BEAD" ]; then
   # 2026-10-10: the shared ~/.local/bin/pf-wt is 1010 commits stale (tsp-hqm1p.52) and cannot remove a
   # set holding a pf-wt evidence target (tsp-f3fm.234); the pinned origin/main pf-wt can.
-  "$PF_TOOL" pf-wt.sh rm "$BEAD" 2>&1 | tail -3
+  remove_step "$PF_TOOL" pf-wt.sh rm "$BEAD"
+  if [ -e "$ROOT" ]; then echo "WORKTREE_REMOVE_FAILED path=$ROOT reason=set_survived (run IS released)"; cleanup_failed=1; fi
 else
   # 2026-10-06: with WORKTREE_ROOT=<...-r2> the checks verified ROOT, but `pf-wt rm $BEAD` removed
   # /home/matt/wt/$BEAD, a DIFFERENT (preserved) run's tree. Remove only the verified ROOT, per repo,
@@ -306,12 +320,14 @@ else
   # that name removes exactly the verified ROOT (with pf-wt's own dirty-tree refusal).
   set_name=$(basename "$ROOT")
   if grep -qx "pf-wt $set_name" "$(git -C "$(ls -d "$ROOT"/*/ | head -n 1)" rev-parse --git-dir 2>/dev/null)/locked" 2>/dev/null; then
-    "$PF_TOOL" pf-wt.sh rm "$set_name" 2>&1 | tail -3
+    remove_step "$PF_TOOL" pf-wt.sh rm "$set_name"
   fi
   for d in "$ROOT"/*/; do
     d=${d%/}; [ -e "$d/.git" ] || continue
-    git -C "$d" worktree remove "$d" 2>&1 | tail -2
-    [ -e "$d" ] && echo "WORKTREE_REMOVE_FAILED path=$d (run IS released)" || echo "removed worktree $d"
+    remove_step git -C "$d" worktree remove "$d"
+    if [ -e "$d" ]; then echo "WORKTREE_REMOVE_FAILED path=$d (run IS released)"; cleanup_failed=1; else echo "removed worktree $d"; fi
   done
-  if [ ! -e "$ROOT" ]; then echo "set dir $ROOT already removed"; elif rmdir "$ROOT" 2>/dev/null; then echo "removed set dir $ROOT"; else echo "set dir $ROOT kept (not empty)"; fi
+  if [ ! -e "$ROOT" ]; then echo "set dir $ROOT already removed"; elif rmdir "$ROOT" 2>/dev/null; then echo "removed set dir $ROOT"
+  else echo "WORKTREE_REMOVE_FAILED path=$ROOT reason=set_dir_not_empty (run IS released)"; cleanup_failed=1; fi
 fi
+[ "$cleanup_failed" = 0 ] || exit 6
