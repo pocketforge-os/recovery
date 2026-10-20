@@ -37,7 +37,7 @@ PY
 esac
 EOF
 printf '#!/bin/sh\nexit 0\n' > "$STUBS/gh"
-printf '#!/bin/sh\necho "$*" >> "%s/remove"\n' "$CALLS" > "$STUBS/pf-automation-tool"
+printf '#!/bin/sh\necho "$*" >> "%s/remove"\n[ -z "${FAKE_RM_FAIL:-}" ] || { echo "pf-wt: refuse=x reason=ownership_unproven" >&2; exit 1; }\n' "$CALLS" > "$STUBS/pf-automation-tool"
 chmod +x "$GPU/pf-task-run-home" "$STUBS"/*
 
 git init -q --bare -b main "$TMP/origin.git"
@@ -82,6 +82,12 @@ run_case tsp-keep STUB_RECEIPT="$(kept_receipt "$repo")"
 run_case tsp-keep STUB_RECEIPT='{}'
 [ "$rc" = 0 ] && grep -q 'pf-wt.sh rm tsp-keep' "$CALLS/remove" 2>/dev/null \
   && ok 'ordinary released receipt still removes via pf-wt' || bad "ordinary released receipt still removes via pf-wt (rc=$rc out=$out)"
+
+# 4b. The run is released but the remover refuses (e.g. the removal guard): the failure propagates (exit 6), never
+#     a silent success that leaves the tree behind (review on recovery#26, tsp-mc9m.41.1030.62).
+run_case tsp-keep STUB_RECEIPT='{}' FAKE_RM_FAIL=1
+[ "$rc" = 6 ] && grep -q 'WORKTREE_REMOVE_FAILED' <<<"$out" && grep -q 'reason=ownership_unproven' <<<"$out" \
+  && ok 'a refused removal after release exits 6 and says so' || bad "refused removal after release (rc=$rc out=$out)"
 
 # 5. PRESERVATION bundle: supersede.preservation + retention requested, receipt sha256 read back.
 repo=$(make_set tsp-bundle 0)
