@@ -24,6 +24,10 @@ jobs:
           bash gpu14/tests/bd-close-safe-test.sh
       - name: gpu14 fleet-board classification hermetic controls
         run: python3 -B gpu14/fleet-board/test_collect.py
+      - name: gpu14 kit-preflight boot-open request controls
+        run: bash gpu14/tests/kit-preflight-boot-open-test.sh
+      - name: gpu14 kit-preflight C9/C10/C11 fail-closed controls
+        run: bash gpu14/tests/kit-preflight-fail-closed-test.sh
       - name: Battery probe hermetic controls
         run: env PATH=/usr/bin:/bin python3 -B -I tsp-mc9m.60.29.6/test_battery_probe.py
       - name: Test
