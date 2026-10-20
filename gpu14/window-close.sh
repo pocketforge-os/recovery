@@ -13,7 +13,12 @@ clone=$(systemctl --user show pf-kit-window-runner.service -p Environment --valu
 [ -d "$clone" ] || { echo "WINDOW_CLOSE_REFUSED reason=deploy_clone_unknown"; exit 3; }
 log="$R/close-${gen:0:8}.log"
 systemctl --user stop pf-kit-window-runner.service
-PF_KIT_AUTOMATION_REPO="$clone" timeout 900 pf-automation-tool pf-kit-window-runner close "$gen" --reason "$reason" >"$log" 2>&1
+# 2026-10-19: when staging_required, close needs the generation-bound DUT key ref and the bench route
+# (PF_BENCH_DUT_HOST and friends). The service gets them from its env file; an in-process close must load it too.
+envf="$HOME/.config/pocketforge/kit-window-runner.env"
+( if [ -r "$envf" ]; then set -a; . "$envf"; set +a; fi
+  PF_KIT_DUT_KEY_SECRET="kit-window/$gen/dut-key" PF_KIT_AUTOMATION_REPO="$clone" \
+    exec timeout 900 pf-automation-tool pf-kit-window-runner close "$gen" --reason "$reason" ) >"$log" 2>&1
 rc=$?
 systemctl --user start pf-kit-window-runner.service
 svc=$(systemctl --user is-active pf-kit-window-runner.service)
