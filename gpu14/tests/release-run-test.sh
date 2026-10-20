@@ -101,6 +101,11 @@ run_case tsp-bundle SUPERSEDED_BY=tsp-x.1 SUPERSEDE_REASON=r PRESERVATION="bundl
 
 # 7. Local pre-checks refuse before any pf-task release call.
 ln -s "$bundle" "$PRES/link.bundle"; cp "$bundle" "$TMP/outside.bundle"
+# A FIFO under the root must refuse promptly, never block the pre-check on open().
+mkfifo "$PRES/fifo.bundle"
+run_case tsp-bundle SUPERSEDED_BY=tsp-x.1 SUPERSEDE_REASON=r PRESERVATION="bundle:$PRES/fifo.bundle#$sha" STUB_RECEIPT="$good_receipt" timeout 20
+[ "$rc" = 2 ] && grep -q preservation_not_regular_file <<<"$out" && [ ! -e "$CALLS/release.json" ] \
+  && ok 'FIFO bundle refuses without blocking' || bad "FIFO bundle refuses without blocking (rc=$rc out=$out)"
 for spec in "bundle:$bundle#$(printf 1%.0s {1..64})|preservation_sha256_mismatch" "bundle:$PRES/link.bundle#$sha|preservation_not_regular_file" \
             "bundle:$TMP/outside.bundle#$sha|preservation_outside_root" "file:$bundle|preservation_malformed"; do
   run_case tsp-bundle SUPERSEDED_BY=tsp-x.1 SUPERSEDE_REASON=r PRESERVATION="${spec%|*}" STUB_RECEIPT="$good_receipt"

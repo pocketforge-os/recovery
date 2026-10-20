@@ -36,7 +36,7 @@ if [ -n "${PRESERVATION:-}" ]; then
   spec=${PRESERVATION#bundle:}; PRES_PATH=${spec%'#'*}; PRES_SHA=${spec##*'#'}
   [[ "$PRES_SHA" =~ ^[0-9a-f]{64}$ ]] || { echo "RELEASE_REFUSED reason=preservation_sha256_malformed"; exit 2; }
   [ -n "${SUPERSEDED_BY:-}" ] || { echo "RELEASE_REFUSED reason=preservation_requires_superseded_by"; exit 2; }
-  # One open file identity (O_NOFOLLOW, fstat regular) is contained, hashed and re-matched to the path; an
+  # One open file identity (lstat regular, O_NOFOLLOW|O_NONBLOCK, fstat same inode) is contained, hashed and re-matched to the path; an
   # unresolvable root refuses. pf-task re-verifies the bundle independently (hash before and after).
   pres_why=$(python3 - "$PRES_PATH" "$PRESERVED_BASE" "$PRES_SHA" <<'PY'
 import hashlib, os, stat, sys
@@ -47,13 +47,20 @@ except OSError:
     print("preservation_root_unresolved"); sys.exit()
 if not os.path.isdir(root):
     print("preservation_root_unresolved"); sys.exit()
+# lstat first and open O_NONBLOCK: a FIFO or device is rejected without ever blocking on open.
 try:
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    seen = os.lstat(path)
+except OSError:
+    print("preservation_not_regular_file"); sys.exit()
+if not stat.S_ISREG(seen.st_mode):
+    print("preservation_not_regular_file"); sys.exit()
+try:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
 except OSError:
     print("preservation_not_regular_file"); sys.exit()
 with os.fdopen(fd, "rb") as stream:
     held = os.fstat(fd)
-    if not stat.S_ISREG(held.st_mode):
+    if not stat.S_ISREG(held.st_mode) or (held.st_dev, held.st_ino) != (seen.st_dev, seen.st_ino):
         print("preservation_not_regular_file"); sys.exit()
     real = os.path.realpath("/proc/self/fd/%d" % fd)
     if os.path.commonpath([root, real]) != root or real == root:
