@@ -27,6 +27,9 @@
 # read back: kept paths / bundle sha256 that differ from the request (or an unrequested keep) exit 5
 # RELEASE_RECEIPT_MISMATCH and remove nothing. A remover that fails after the release exits 6
 # (WORKTREE_REMOVE_FAILED; the run IS released).
+# QUIESCE_ACTOR=<actor> QUIESCE_REASON=<reason> passes the audited fenced stop used by terminal launch failures.
+# SUPERSEDED_CONTROLLER_LOST=1 additionally passes disposition=superseded_controller_lost and requires both
+# quiesce fields plus SUPERSEDED_BY/SUPERSEDE_REASON. Receipt mismatches keep every worktree.
 set -u
 RUN=$1; BEAD=$2; DEF=${3:-}
 WT_BASE=${PF_RELEASE_WT_BASE:-/home/matt/wt}
@@ -34,6 +37,20 @@ PRESERVED_BASE=${PF_RELEASE_PRESERVED_BASE:-/home/matt/recovery/release-preserve
 ROOT=$WT_BASE/$BEAD
 KEEP=${KEEP_WORKTREE:-0}; PRES_PATH=""; PRES_SHA=""
 case "$KEEP" in 0|1) ;; *) echo "RELEASE_REFUSED reason=keep_worktree_not_0_or_1"; exit 2 ;; esac
+CONTROLLER_LOST=${SUPERSEDED_CONTROLLER_LOST:-0}
+case "$CONTROLLER_LOST" in
+  0|1) ;;
+  *) echo "RELEASE_REFUSED reason=superseded_controller_lost_not_0_or_1"; exit 2 ;;
+esac
+if { [ -n "${QUIESCE_ACTOR:-}" ] && [ -z "${QUIESCE_REASON:-}" ]; } \
+    || { [ -z "${QUIESCE_ACTOR:-}" ] && [ -n "${QUIESCE_REASON:-}" ]; }; then
+  echo "RELEASE_REFUSED reason=quiesce_actor_reason_must_be_paired"; exit 2
+fi
+if [ "$CONTROLLER_LOST" = 1 ]; then
+  [ -n "${SUPERSEDED_BY:-}" ] || { echo "RELEASE_REFUSED reason=superseded_controller_lost_requires_superseded_by"; exit 2; }
+  [ -n "${SUPERSEDE_REASON:-}" ] || { echo "RELEASE_REFUSED reason=superseded_controller_lost_requires_supersede_reason"; exit 2; }
+  [ -n "${QUIESCE_ACTOR:-}" ] || { echo "RELEASE_REFUSED reason=superseded_controller_lost_requires_quiesce"; exit 2; }
+fi
 if [ -n "${PRESERVATION:-}" ]; then
   case "$PRESERVATION" in bundle:/*'#'*) ;; *) echo "RELEASE_REFUSED reason=preservation_malformed hint=bundle:<abs path>#<sha256>"; exit 2 ;; esac
   spec=${PRESERVATION#bundle:}; PRES_PATH=${spec%'#'*}; PRES_SHA=${spec##*'#'}
@@ -240,12 +257,16 @@ for rc in $pending; do
 done
 KEPT_PATHS=()
 for r in "${REPOS[@]}"; do [ -e "${r%/}/.git" ] && KEPT_PATHS+=("$(realpath -e "${r%/}")"); done
-req=$(RUN="$RUN" KEEP="$KEEP" PRES_PATH="$PRES_PATH" PRES_SHA="$PRES_SHA" python3 -c 'import json,os,sys
+req=$(RUN="$RUN" KEEP="$KEEP" PRES_PATH="$PRES_PATH" PRES_SHA="$PRES_SHA" CONTROLLER_LOST="$CONTROLLER_LOST" python3 -c 'import json,os,sys
 e=os.environ; req={"run_id": e["RUN"]}
 if e.get("SUPERSEDED_BY"):
     req["supersede"]={"superseded_by": e["SUPERSEDED_BY"], "reason": e["SUPERSEDE_REASON"]}
     if e["PRES_SHA"]:
         req["supersede"]["preservation"]={"kind": "bundle", "path": e["PRES_PATH"], "sha256": e["PRES_SHA"]}
+if e.get("QUIESCE_ACTOR"):
+    req["quiesce"]={"actor": e["QUIESCE_ACTOR"], "reason": e["QUIESCE_REASON"]}
+if e["CONTROLLER_LOST"] == "1":
+    req["disposition"]={"type": "superseded_controller_lost", "reason": e["QUIESCE_REASON"]}
 if e["KEEP"] == "1":
     reason=e.get("KEEP_REASON") or ("bundle preservation: HEAD on no origin branch" if e["PRES_SHA"] else "release-run.sh KEEP_WORKTREE=1")
     req["worktree_retention"]={"reason": reason, "paths": sys.argv[1:]}
@@ -263,7 +284,7 @@ if [ "$st" != released ]; then
 fi
 echo "released run=$RUN"
 # Read the durable receipt back; never trust the request. Any mismatch keeps every tree.
-mismatch=$(printf '%s' "$sj" | KEEP="$KEEP" PRES_PATH="$PRES_PATH" PRES_SHA="$PRES_SHA" python3 -c 'import json,os,sys
+mismatch=$(printf '%s' "$sj" | KEEP="$KEEP" PRES_PATH="$PRES_PATH" PRES_SHA="$PRES_SHA" CONTROLLER_LOST="$CONTROLLER_LOST" python3 -c 'import json,os,sys
 t=lambda v: v.get("text") if isinstance(v, dict) else v
 e=os.environ; d=json.load(sys.stdin); rw=d.get("release_worktree") or {}
 kept={os.path.realpath(t(k.get("path")) or "") for k in rw.get("kept_paths") or [] if isinstance(k, dict)}
@@ -276,7 +297,15 @@ elif rw.get("retention") == "kept":
 if e["PRES_SHA"]:
     p=(d.get("release_disposition") or {}).get("preservation") or {}
     if t(p.get("sha256")) != e["PRES_SHA"] or t(p.get("path")) != e["PRES_PATH"]:
-        print("bundle_receipt=%s" % (t(p.get("sha256")) or "absent")); sys.exit()' "${KEPT_PATHS[@]}" 2>&1)
+        print("bundle_receipt=%s" % (t(p.get("sha256")) or "absent")); sys.exit()
+if e.get("QUIESCE_ACTOR"):
+    q=(d.get("release_runtime") or {}).get("quiescence") or {}
+    if t(q.get("actor")) != e["QUIESCE_ACTOR"] or t(q.get("reason")) != e["QUIESCE_REASON"]:
+        print("quiesce_receipt=%s" % (t(q.get("actor")) or "absent")); sys.exit()
+if e["CONTROLLER_LOST"] == "1":
+    p=d.get("release_disposition") or {}
+    if p.get("disposition") != "superseded_controller_lost" or t(p.get("superseded_by")) != e["SUPERSEDED_BY"]:
+        print("controller_lost_receipt=%s" % (p.get("disposition") or "absent")); sys.exit()' "${KEPT_PATHS[@]}" 2>&1)
 if [ -n "$mismatch" ]; then
   echo "RELEASE_RECEIPT_MISMATCH run=$RUN $mismatch"
   echo "worktrees KEPT at $ROOT (run IS released; nothing removed)"
