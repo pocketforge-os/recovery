@@ -304,7 +304,9 @@ if e.get("QUIESCE_ACTOR"):
         print("quiesce_receipt=%s" % (t(q.get("actor")) or "absent")); sys.exit()
 if e["CONTROLLER_LOST"] == "1":
     p=d.get("release_disposition") or {}
-    if p.get("disposition") != "superseded_controller_lost" or t(p.get("superseded_by")) != e["SUPERSEDED_BY"]:
+    if (p.get("disposition") != "superseded_controller_lost"
+            or t(p.get("reason")) != e["QUIESCE_REASON"]
+            or t(p.get("superseded_by")) != e["SUPERSEDED_BY"]):
         print("controller_lost_receipt=%s" % (p.get("disposition") or "absent")); sys.exit()' "${KEPT_PATHS[@]}" 2>&1)
 if [ -n "$mismatch" ]; then
   echo "RELEASE_RECEIPT_MISMATCH run=$RUN $mismatch"
