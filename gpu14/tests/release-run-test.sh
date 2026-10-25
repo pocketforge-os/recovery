@@ -141,5 +141,61 @@ run_case tsp-bundle PRESERVATION="bundle:$bundle#$sha" STUB_RECEIPT="$good_recei
 [ "$rc" = 2 ] && grep -q preservation_requires_superseded_by <<<"$out" && [ ! -e "$CALLS/release.json" ] \
   && ok 'PRESERVATION without SUPERSEDED_BY refuses' || bad "PRESERVATION without SUPERSEDED_BY refuses (rc=$rc out=$out)"
 
+# 8. Existing launch-terminal supersede path: expose paired quiesce actor/reason without a new disposition.
+repo=$(make_set tsp-quiesce 1)
+quiesce_receipt=$(kept_receipt "$repo" ',"release_runtime":{"quiescence":{"actor":"gpu-14","reason":"retire superseded launcher-lost run"}}')
+run_case tsp-quiesce KEEP_WORKTREE=1 SUPERSEDED_BY=pocketforge-os/pfvd#61 SUPERSEDE_REASON='successor work landed' \
+  QUIESCE_ACTOR=gpu-14 QUIESCE_REASON='retire superseded launcher-lost run' STUB_RECEIPT="$quiesce_receipt"
+[ "$rc" = 0 ] && [ "$(req 'd["quiesce"]')" = "{'actor': 'gpu-14', 'reason': 'retire superseded launcher-lost run'}" ] \
+  && [ "$(req 'd.get("disposition")')" = None ] \
+  && ok 'launch-terminal supersede passes quiesce without a new disposition' \
+  || bad "launch-terminal quiesce request (rc=$rc out=$out req=$(cat "$CALLS/release.json" 2>/dev/null))"
+
+# 9. Controller-lost path: explicit flag adds only the audited disposition and receipt must echo it.
+controller_lost_receipt=$(kept_receipt "$repo" ',"release_runtime":{"quiescence":{"actor":"gpu-14","reason":"retire superseded controller-lost run"}},"release_disposition":{"disposition":"superseded_controller_lost","reason":"retire superseded controller-lost run","superseded_by":{"text":"pocketforge-os/pfvd#60"},"cancelled_count":2}')
+run_case tsp-quiesce KEEP_WORKTREE=1 SUPERSEDED_BY=pocketforge-os/pfvd#60 SUPERSEDE_REASON='successor work landed' \
+  QUIESCE_ACTOR=gpu-14 QUIESCE_REASON='retire superseded controller-lost run' SUPERSEDED_CONTROLLER_LOST=1 \
+  STUB_RECEIPT="$controller_lost_receipt"
+[ "$rc" = 0 ] && [ "$(req 'd["disposition"]["type"]')" = superseded_controller_lost ] \
+  && [ "$(req 'd["disposition"]["reason"]')" = 'retire superseded controller-lost run' ] \
+  && ok 'controller-lost flag passes the audited disposition with supersede and quiesce' \
+  || bad "controller-lost disposition request (rc=$rc out=$out req=$(cat "$CALLS/release.json" 2>/dev/null))"
+
+# 10. Inputs are paired and the controller-lost flag cannot weaken either precondition.
+for spec in \
+  "QUIESCE_ACTOR=gpu-14|quiesce_actor_reason_must_be_paired" \
+  "QUIESCE_REASON=why|quiesce_actor_reason_must_be_paired" \
+  "SUPERSEDED_CONTROLLER_LOST=2|superseded_controller_lost_not_0_or_1" \
+  "SUPERSEDED_CONTROLLER_LOST=1 QUIESCE_ACTOR=gpu-14 QUIESCE_REASON=why|superseded_controller_lost_requires_superseded_by" \
+  "SUPERSEDED_CONTROLLER_LOST=1 SUPERSEDED_BY=pocketforge-os/pfvd#60 SUPERSEDE_REASON=why|superseded_controller_lost_requires_quiesce"; do
+  vars=${spec%|*}; why=${spec#*|}
+  # The test table intentionally expands assignment words through env.
+  # shellcheck disable=SC2086
+  run_case tsp-quiesce $vars STUB_RECEIPT="$controller_lost_receipt"
+  [ "$rc" = 2 ] && grep -q "$why" <<<"$out" && [ ! -e "$CALLS/release.json" ] \
+    && ok "$why refuses before release" || bad "$why (rc=$rc out=$out)"
+done
+
+# 11. Receipt read-back covers both the quiesce attestation and disposition, never just released state.
+run_case tsp-quiesce KEEP_WORKTREE=1 SUPERSEDED_BY=pocketforge-os/pfvd#60 SUPERSEDE_REASON='successor work landed' \
+  QUIESCE_ACTOR=gpu-14 QUIESCE_REASON='retire superseded controller-lost run' SUPERSEDED_CONTROLLER_LOST=1 \
+  STUB_RECEIPT="$(kept_receipt "$repo" ',"release_runtime":{"quiescence":{"actor":"other","reason":"wrong"}},"release_disposition":{"disposition":"superseded"}')"
+[ "$rc" = 5 ] && grep -q 'RELEASE_RECEIPT_MISMATCH.*quiesce_receipt=' <<<"$out" && [ ! -e "$CALLS/remove" ] \
+  && ok 'quiesce receipt mismatch keeps the tree' \
+  || bad "quiesce receipt mismatch (rc=$rc out=$out)"
+
+for receipt_case in \
+  'type|,"release_runtime":{"quiescence":{"actor":"gpu-14","reason":"retire superseded controller-lost run"}},"release_disposition":{"disposition":"superseded","reason":"retire superseded controller-lost run","superseded_by":{"text":"pocketforge-os/pfvd#60"}}' \
+  'reason|,"release_runtime":{"quiescence":{"actor":"gpu-14","reason":"retire superseded controller-lost run"}},"release_disposition":{"disposition":"superseded_controller_lost","reason":"wrong reason","superseded_by":{"text":"pocketforge-os/pfvd#60"}}' \
+  'superseded_by|,"release_runtime":{"quiescence":{"actor":"gpu-14","reason":"retire superseded controller-lost run"}},"release_disposition":{"disposition":"superseded_controller_lost","reason":"retire superseded controller-lost run","superseded_by":{"text":"pocketforge-os/pfvd#wrong"}}'; do
+  field=${receipt_case%%|*}; receipt_extra=${receipt_case#*|}
+  run_case tsp-quiesce KEEP_WORKTREE=1 SUPERSEDED_BY=pocketforge-os/pfvd#60 SUPERSEDE_REASON='successor work landed' \
+    QUIESCE_ACTOR=gpu-14 QUIESCE_REASON='retire superseded controller-lost run' SUPERSEDED_CONTROLLER_LOST=1 \
+    STUB_RECEIPT="$(kept_receipt "$repo" "$receipt_extra")"
+  [ "$rc" = 5 ] && grep -q 'RELEASE_RECEIPT_MISMATCH.*controller_lost_receipt=' <<<"$out" && [ ! -e "$CALLS/remove" ] \
+    && ok "controller-lost $field receipt mismatch keeps the tree" \
+    || bad "controller-lost $field receipt mismatch (rc=$rc out=$out)"
+done
+
 echo "=== $PASS passed, $FAIL failed ==="
 [ "$FAIL" = 0 ]
