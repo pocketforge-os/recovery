@@ -185,11 +185,34 @@ else
   reseal_manifest || exit 2
   echo "$(ts) CHAIN resume from fill (window $G open)"
 fi
-if [ "${WINDOW_CHAIN_FROM:-}" = fill ] && [ -s "$P/CAPABILITY-BUNDLE.filled.txt" ]; then
-  f="PF_KIT_WINDOW_FILL state=pass reused_existing=1"; frc=0   # fill is create-once (filled_bundle_exists)
-elif [ $FORMAT = native ]; then f=$(pf-automation-tool pf-kit-window-prepare fill-bundle "$G" --package-dir "$P" 2>&1); frc=$?
-else f=$(cd "$P" && env PATH=/usr/bin:/bin ./fill-bundle.sh 2>&1); frc=$?; fi; echo "$(ts) CHAIN fill rc=$frc $(printf '%s' "$f" | tail -1 | cut -c1-250)"
-[ $frc -eq 0 ] && printf '%s' "$f" | grep -qE '^(FILL_OK|PF_KIT_WINDOW_FILL state=pass)' && [ "$(grep -c '@READ_FROM' "$P/CAPABILITY-BUNDLE.filled.txt")" = 0 ] || { echo "$(ts) CHAIN_STOP fill_failed"; exit 3; }
+# 2026-10-26 (tsp-mc9m.41.1030.56.4, incident gen 2b59e3da 2026-10-20T15:08:06Z): fill died ONCE on a transient
+# mirror/worktree race (rc=1 reason=driver_pin_materialize_failed), this chain STOPped, and the DUT sat open
+# 29.8 min until a manual WINDOW_CHAIN_FROM=fill retry passed 59 s later. So: retry the fill step exactly once,
+# host-only, with the existing-bundle reuse semantics of WINDOW_CHAIN_FROM=fill (fill is create-once, the bundle
+# step is idempotent and touches no DUT). rc 64 is a REFUSAL (e.g. filled_bundle_exists) and is final -- a retry
+# cannot help. A second failure stops as before. The FILL_RETRY line records the FIRST reason= token of the
+# captured output: the wrapper prints its envelope (reason=driver_pin_materialize_failed) LAST, and the CHAIN
+# fill log line keeps only tail -1, which is why the inner cause was lost on 2026-10-20.
+FILL_RETRYING=0
+fill_once() {  # sets f/frc; reuse beats re-running the create-once fill
+  if { [ "${WINDOW_CHAIN_FROM:-}" = fill ] || [ "$FILL_RETRYING" = 1 ]; } && [ -s "$P/CAPABILITY-BUNDLE.filled.txt" ]; then
+    f="PF_KIT_WINDOW_FILL state=pass reused_existing=1"; frc=0   # fill is create-once (filled_bundle_exists)
+  elif [ $FORMAT = native ]; then f=$(pf-automation-tool pf-kit-window-prepare fill-bundle "$G" --package-dir "$P" 2>&1); frc=$?
+  else f=$(cd "$P" && env PATH=/usr/bin:/bin ./fill-bundle.sh 2>&1); frc=$?; fi
+  echo "$(ts) CHAIN fill rc=$frc $(printf '%s' "$f" | tail -1 | cut -c1-250)"
+}
+fill_ok() {
+  [ $frc -eq 0 ] && printf '%s' "$f" | grep -qE '^(FILL_OK|PF_KIT_WINDOW_FILL state=pass)' && [ "$(grep -c '@READ_FROM' "$P/CAPABILITY-BUNDLE.filled.txt")" = 0 ]
+}
+fill_once
+if ! fill_ok; then
+  if [ $frc -eq 64 ]; then echo "$(ts) CHAIN_STOP fill_failed"; exit 3; fi
+  freason=$(printf '%s\n' "$f" | grep -oE 'reason=[A-Za-z0-9_]+' | head -1 | cut -d= -f2)
+  echo "$(ts) FILL_RETRY gen=$G first_rc=$frc reason=${freason:-none}"
+  FILL_RETRYING=1
+  fill_once
+  fill_ok || { echo "$(ts) CHAIN_STOP fill_failed"; exit 3; }
+fi
 M=$R/$LABEL-bundle-msg.txt
 { printf 'gpu-14 -> %s: LIVE WINDOW OPEN, gen %s (%s). Idle limit 3600 s from LastActivity, window 5400 s. Submit the sequence-0 network bootstrap NOW from the template below with the filled bundle values, then END THE TURN (%s state=WINDOW_STEP seq=0).\n- Submit steps through the step inbox only; never run pf-kit-window-prepare. gpu-14 sends PF_KIT_NETWORK_READY after your seq-0 receipt; then submit step 1, and each next step as soon as its receipt arrives (one step per turn, ending WINDOW_STEP seq=<n>).\n' "$LABEL" "$G" "$LABEL" "$TOKEN"
   [ -n "$NOTE" ] && printf -- '- %s\n' "$NOTE"
