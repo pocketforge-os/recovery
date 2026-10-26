@@ -194,11 +194,45 @@ fi
 # captured output: the wrapper prints its envelope (reason=driver_pin_materialize_failed) LAST, and the CHAIN
 # fill log line keeps only tail -1, which is why the inner cause was lost on 2026-10-20.
 FILL_RETRYING=0
-fill_once() {  # sets f/frc; reuse beats re-running the create-once fill
-  if { [ "${WINDOW_CHAIN_FROM:-}" = fill ] || [ "$FILL_RETRYING" = 1 ]; } && [ -s "$P/CAPABILITY-BUNDLE.filled.txt" ]; then
-    f="PF_KIT_WINDOW_FILL state=pass reused_existing=1"; frc=0   # fill is create-once (filled_bundle_exists)
-  elif [ $FORMAT = native ]; then f=$(pf-automation-tool pf-kit-window-prepare fill-bundle "$G" --package-dir "$P" 2>&1); frc=$?
+# 2026-10-26 review r4374271677 (recovery#29): a nonempty leftover CAPABILITY-BUNDLE.filled.txt is NOT proof of a
+# usable bundle -- the filler's write() is O_EXCL+fsync but not rename-atomic, so a killed fill can leave a partial
+# or stale file, and reusing it blindly would hand a truncated/wrong-generation bundle to the owner. Prove the full
+# contract against the sealed template before any reuse (identity, anchor, completeness, marker fill, byte-identical
+# passthrough of every non-marker template line). An invalid leftover is never sent and never deleted (tool-owned
+# evidence): we fall through to the create-once filler, which refuses rc 64 filled_bundle_exists and the chain
+# STOPs fail-closed.
+bundle_reusable() {
+  local b="$P/CAPABILITY-BUNDLE.filled.txt" t="$P/CAPABILITY-BUNDLE.txt" line key
+  [ -s "$b" ] && [ -f "$t" ] || return 1
+  grep -qx "Generation=$G" "$b" || return 1                       # bound to THIS generation
+  grep -Eq '^AnchorSHA256=[0-9a-f]{64}$' "$b" || return 1         # valid window anchor, exactly 64 lowercase hex
+  grep -qx 'Sequence=0' "$b" || return 1
+  ! grep -q '@READ_FROM' "$b" || return 1                         # every marker filled
+  [ "$(head -1 "$b")" = "$(head -1 "$t")" ] || return 1           # same bundle format/header as the sealed template
+  [ "$(wc -l < "$b")" -ge "$(wc -l < "$t")" ] || return 1         # complete: fill substitutes in place, never drops lines
+  while IFS= read -r line; do                                     # fill leaves every non-marker line byte-identical
+    key=${line%%=*}
+    case "$key" in ''|*[!A-Za-z0-9_]*) continue ;; esac           # prose/blank/header lines are not key=value
+    case "$line" in
+      *@READ_FROM*) grep -Eq "^$key=.+" "$b" || return 1 ;;
+      *)            grep -qxF "$line" "$b" || return 1 ;;
+    esac
+  done < "$t"
+  return 0
+}
+run_fill() {  # sets f/frc from the package's real filler
+  if [ $FORMAT = native ]; then f=$(pf-automation-tool pf-kit-window-prepare fill-bundle "$G" --package-dir "$P" 2>&1); frc=$?
   else f=$(cd "$P" && env PATH=/usr/bin:/bin ./fill-bundle.sh 2>&1); frc=$?; fi
+}
+fill_once() {  # sets f/frc; a PROVEN leftover bundle beats re-running the create-once fill
+  if { [ "${WINDOW_CHAIN_FROM:-}" = fill ] || [ "$FILL_RETRYING" = 1 ]; } && [ -s "$P/CAPABILITY-BUNDLE.filled.txt" ]; then
+    if bundle_reusable; then
+      f="PF_KIT_WINDOW_FILL state=pass reused_existing=1"; frc=0   # fill is create-once (filled_bundle_exists)
+    else
+      echo "$(ts) FILL_REUSE_REFUSED gen=$G reason=bundle_contract_invalid"
+      run_fill
+    fi
+  else run_fill; fi
   echo "$(ts) CHAIN fill rc=$frc $(printf '%s' "$f" | tail -1 | cut -c1-250)"
 }
 fill_ok() {
