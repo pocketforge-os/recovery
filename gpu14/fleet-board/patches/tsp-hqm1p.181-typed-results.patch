@@ -1,0 +1,506 @@
+tsp-hqm1p.181: fleet board "Bench results (typed, 24 h)" reads the current typed sources.
+
+Apply to the LIVE (untracked) /home/matt/recovery/gpu14/fleet-board/{collect.py,render.py}; the tracked copies of those two files in
+this repo are the retired gpu-14 program and do not carry collect_typed_results at all.
+
+  cd /home/matt/recovery/gpu14/fleet-board
+  sha256sum collect.py render.py        # must print the BASE values below, else re-base the patch by hand
+  patch -p1 --dry-run < <this file> && patch -p1 -b -z .bak-tsp-hqm1p.181 < <this file>
+  sha256sum collect.py render.py        # must print the RESULT values below
+  python3 -I /path/to/gpu14/tests/fleet-board-typed-results-test.py     # 19 tests, uses ../fleet-board/{collect,render}.py
+
+BASE   collect.py 74dbe9632d4c2b8d985b394c5a6a695cc0ad17f2529f785703beefed04a88d3d
+BASE   render.py  9e179c8ee830a4a6043d0dcd5ae54cbcc19cb5019113e5dda06800548c9eb42f
+RESULT collect.py 1f36ed0f2d1c94f55772f378874a2bdc9ab658fb936158dc6a69b3e3a5980eab
+RESULT render.py  977efcdf2a4f08ffa98d1a762c5446178e9059130543d4d846c5b372b753d39d
+
+--- a/collect.py
++++ b/collect.py
+@@ -21,8 +21,12 @@
+   D. device    BENCH's newest status line (+ the newest runner=/dut=/place= it reported),
+                `systemctl --user show pf-kit-window-runner.service`, the kit windows
+                (~/.local/state/pocketforge/kit-windows), <G16>/runs/relay-sent.json for the
+-               BENCH queue, and typed results (BENCH-RESULT*.json, DEPLOY-RECEIPT*.txt)
+-               under TYPED_RESULTS_ROOT of the last TYPED_RESULTS_WINDOW_H hours.
++               BENCH queue, and typed results of the last TYPED_RESULTS_WINDOW_H hours: the kit
++               windows' own close records (terminal.json, a failed boot-open, a failed runner:
++               collect_windows) and the files under TYPED_RESULTS_ROOT (BENCH-RESULT*.json v1,
++               lane-written *BENCH-RESULT*.txt, DEPLOY-RECEIPT*.txt).
++               2026-11-08 (tsp-hqm1p.181): a result source that yields no row while kit windows closed
++               is a WARN (results.warns), never a quiet "no typed result".
+                2026-11-05 (tsp-hqm1p.100): the same kit windows give each hardware row its device evidence
+                (collect_hw_windows / window_links): window_at, window_result ok|fail, window_generation,
+                window_bead, window_via bead|named|cluster, window_source, window_ok_n/window_fail_n, windows[],
+@@ -74,9 +78,12 @@
+                      queue:[{cluster, lane, from, request, request_file, request_sha256, relayed_at,
+                      age_s, answered, answers_after, answer:{to, file, at, state, reason,
+                      typed_cause}|null}], sent_error,
+-                     results:{window_h, root, depth, total, error, groups:[{kind, state, reason,
+-                     typed_cause, count, latest_at, lanes, sev}], items:[{kind, file, path, at,
+-                     state, reason, typed_cause, lane, lane_hint, boundary}]}}
++                     results:{window_h, root, depth, total, error, windows_root, windows_closed,
++                     by_kind:{kind: n}, warns:[{source kit-window|files, windows_closed, text}],
++                     groups:[{kind, state, reason, typed_cause, count, latest_at, lanes, sev}],
++                     items:[{kind kit-window|bench-result|bench-result-txt|deploy-result|deploy-receipt,
++                     file, path, at, state, reason, typed_cause, lane, lane_hint, boundary,
++                     (kit-window) gen, lane_reason, purpose}]}}
+   stale             [{id, title, status, assignee, tier, parent, updated_at,
+                      last_comment_at, comment_count, age_s}]
+   long_idle         {count, ids:[...]}   in_progress in scope, untouched > STALE_LOOKBACK_H
+@@ -697,7 +704,8 @@
+ #   <KIT_WINDOWS>/boot-open-<gen>.json of the last BENCH_QUEUE_WINDOW_H hours + <gen>/{runner,active,terminal}.json
+ #   <G16>/runs/relay-sent.json       {"<TARGET> <sha256>": {from, file, at}}: each lane's newest request to BENCH and
+ #                                    whether BENCH relayed anything back to that lane after it (watch-runs.py rule)
+-#   typed results: BENCH-RESULT*.json and DEPLOY-RECEIPT*.txt under TYPED_RESULTS_ROOT (find -maxdepth), last 24 h
++#   typed results, last 24 h: the kit windows' close records (collect_windows rows, read again for terminal.json) and the
++#   BENCH-RESULT*.json / *BENCH-RESULT*.txt / DEPLOY-RECEIPT*.txt files under TYPED_RESULTS_ROOT (find -maxdepth)
+ KIT_WINDOWS = os.environ.get("PF_KIT_WINDOWS_DIR") or os.path.expanduser("~/.local/state/pocketforge/kit-windows")
+ RUNNER_UNIT = "pf-kit-window-runner.service"
+ BENCH_QUEUE_WINDOW_H = 24       # requests relayed to BENCH within this window form the BENCH queue
+@@ -707,10 +715,28 @@
+ TYPED_RESULTS_ROOT = os.environ.get("FB_TYPED_RESULTS_ROOT") or "/home/matt/recovery"
+ TYPED_RESULTS_DEPTH = 4
+ TYPED_RESULTS_WINDOW_H = 24
+-TYPED_RESULTS_SHOW = 25
++TYPED_RESULTS_SHOW = 40
+ TYPED_RESULT_MAX_BYTES = 4 << 20
++TYPED_REQUEST_SLACK_H = 8       # a window closes at most MaxTotalSeconds (7 h) after its request: read requests this much older
++TYPED_STEP_STDOUT_MAX = 1 << 20  # bytes read of each step's payload stdout (the watcher reads 4 MiB; a result line is near the end)
+ TYPED_GOOD = {"PASS", "OK", "SUCCESS", "CLEAN", "DONE"}
+-TYPED_WARN = {"REFUSED", "SKIPPED", "WAITING"}   # refused before mutation; any other non-pass state is crit
++TYPED_WARN = {"REFUSED", "SKIPPED", "WAITING", "PARTIAL"}   # refused before mutation / stopped on a ruling; any other non-pass state is crit
++TYPED_MUTED = {"UNCLASSIFIED"}                              # a note with no Outcome the parser could place
++GEN_RE = re.compile(r"[0-9a-f]{32}")
++# watch-runs.py's WINDOW_RESULT event rules (tsp-hqm1p.179), re-stated here: the watcher is a daemon module, not a library
++KIT_NORMAL_REASONS = frozenset({"lane_done", "success"})   # terminal.json Reason values that are not themselves a failure
++KIT_STEP_ID_RE = re.compile(r"^(.+)-[0-9a-f]{12}$")        # a step's RequestID is <step>-<12 hex>; boot-open's is the bare generation
++KIT_PAYLOAD_FAIL_RE = re.compile(r"^(PF_[A-Za-z0-9_]+)\b[^\n]*?\bresult=(?i:FAIL(?:ED|URE)?|ERROR|REFUSED)\b[^\n]*", re.M)
++KIT_PAYLOAD_REASON_RE = re.compile(r"\breason=([A-Za-z0-9_.:-]+)")
++KIT_FAILS_MAX = 3               # failing steps named in typed_cause before "+Nmore"
++# lane-written *BENCH-RESULT*.txt: the first `Outcome:` line, classified on its first clause (prose, so a heuristic)
++NOTE_OUTCOME_RE = re.compile(r"^\s*outcome\s*[:=]\s*(.*\S)", re.I | re.M)
++NOTE_CLAUSE_SPLIT_RE = re.compile(r"(?<=[A-Za-z0-9)])[.;](?:\s|$)")
++NOTE_STATES = (("FAIL", re.compile(r"\bNOT A PASS\b|\bFAIL(?:ED|URE|S)?\b", re.I)), ("REFUSED", re.compile(r"\bREFUS(?:ED|AL)\b", re.I)),
++               ("PARTIAL", re.compile(r"\bPARTIAL\b", re.I)), ("PASS", re.compile(r"\bPASS(?:ED|ING)?\b", re.I)),
++               ("CLEAN", re.compile(r"\b(?:CLEAN|COMPLETED?)\b", re.I)))
++NOTE_REASON_RE = re.compile(r"\breason=([A-Za-z0-9_.:-]+)|\breason ([A-Za-z0-9]+(?:_[A-Za-z0-9]+)+)\b", re.I)
++NOTE_CAUSE_RE = re.compile(r"\bfailure_reason=([A-Za-z0-9_.:-]+)", re.I)
+ 
+ 
+ def lane_base(name):
+@@ -728,18 +754,42 @@
+ 
+ def typed_sev(state):
+     s = (state or "").upper()
+-    return "good" if s in TYPED_GOOD else ("warn" if s in TYPED_WARN else ("muted" if not s else "crit"))
++    return "good" if s in TYPED_GOOD else ("warn" if s in TYPED_WARN else ("muted" if not s or s in TYPED_MUTED else "crit"))
++
++
++def typed_kind(base):
++    return ("bench-result" if base.endswith(".json") else "deploy-receipt" if base.startswith("DEPLOY-RECEIPT")
++            else "deploy-result" if "deploy" in base.lower() else "bench-result-txt")
++
++
++def typed_result_name(base):
++    """A file name the typed-results scan reads: BENCH-RESULT*.json (v1), DEPLOY-RECEIPT*.txt, or a lane's *BENCH-RESULT*.txt."""
++    return ((base.startswith("BENCH-RESULT") and base.endswith(".json")) or (base.startswith("DEPLOY-RECEIPT") and base.endswith(".txt"))
++            or ("BENCH-RESULT" in base and base.endswith(".txt")))
++
++
++def note_outcome(text):
++    """(state, reason, typed_cause) of a lane-written BENCH-RESULT note's `Outcome:` line, or None without one. The state is the first
++    of FAIL / REFUSED / PARTIAL / PASS / CLEAN that the line's first clause names ("RUNNER-LEVEL CLEAN, PAYLOAD FAIL" is FAIL),
++    UNCLASSIFIED when it names none; reason = the first reason=<token> (or `reason <snake_case>`), typed_cause = failure_reason=<token>."""
++    m = NOTE_OUTCOME_RE.search(text)
++    if not m:
++        return None
++    line = m.group(1)
++    clause = NOTE_CLAUSE_SPLIT_RE.split(line, 1)[0]
++    state = next((st for st, pat in NOTE_STATES if pat.search(clause)), "UNCLASSIFIED")
++    r, c = NOTE_REASON_RE.search(line), NOTE_CAUSE_RE.search(line)
++    return state, (r.group(1) or r.group(2)) if r else None, c.group(1) if c else None
+ 
+ 
+ def read_typed(path, mtime):
+-    """BENCH-RESULT*.json or DEPLOY-RECEIPT*.txt -> {kind, state, reason, typed_cause, at, lane_hint, boundary}."""
++    """BENCH-RESULT*.json, *BENCH-RESULT*.txt or DEPLOY-RECEIPT*.txt -> {kind, state, reason, typed_cause, at, lane_hint, boundary}."""
+     base = os.path.basename(path)
+     out = {"path": path, "file": base, "mtime": iso(mtime), "at": iso(mtime), "state": None, "reason": None,
+            "typed_cause": None, "lane_hint": None, "boundary": None}
+     try:
+         if os.path.getsize(path) > TYPED_RESULT_MAX_BYTES:
+-            out.update(kind="bench-result" if base.endswith(".json") else "deploy-receipt", state="UNREAD",
+-                       reason="file larger than TYPED_RESULT_MAX_BYTES")
++            out.update(kind=typed_kind(base), state="UNREAD", reason="file larger than TYPED_RESULT_MAX_BYTES")
+             return out
+         if base.endswith(".json"):
+             out["kind"] = "bench-result"
+@@ -764,6 +814,15 @@
+                 out["boundary"] = {"dut": b.get("DUT"), "place": b.get("LabgridPlace")}
+             elif c:
+                 out["boundary"] = {"dut": c.get("power_state"), "place": c.get("place")}
++        elif not base.startswith("DEPLOY-RECEIPT"):
++            # 2026-11-08 (tsp-hqm1p.181): the lanes' BENCH-RESULT notes are prose with an `Outcome:` line, not a schema
++            out["kind"] = typed_kind(base)
++            with open(path, errors="replace") as f:
++                got = note_outcome(f.read(16384))
++            if got is None:
++                out.update(state="UNCLASSIFIED", reason="no Outcome line")
++            else:
++                out["state"], out["reason"], out["typed_cause"] = got
+         else:
+             out["kind"] = "deploy-receipt"
+             with open(path, errors="replace") as f:
+@@ -785,23 +844,189 @@
+     return out
+ 
+ 
++def kit_step_stdout(gen, seq):
++    """Text of GEN's step SEQ payload stdout (revision-input-<seq:06d>/*.stdout, staged candidate-* copies left out), "" when it has none."""
++    d = os.path.join(KIT_WINDOWS, gen, f"revision-input-{seq:06d}")
++    try:
++        names = sorted(n for n in os.listdir(d) if n.endswith(".stdout") and not n.startswith("candidate-"))
++    except OSError:
++        return ""
++    out = []
++    for n in names:
++        try:
++            with open(os.path.join(d, n), "rb") as fh:
++                out.append(fh.read(TYPED_STEP_STDOUT_MAX).decode("utf-8", "replace"))
++        except OSError:
++            continue
++    return "\n".join(out)
++
++
++def kit_attempt_error(gen, seq):
++    """The Error of GEN's step SEQ receipt envelope (receipts/receipt-<seq:06d>-*.json), "" when it has none."""
++    pat = os.path.join(glob.escape(os.path.join(KIT_WINDOWS, gen, "receipts")), f"receipt-{seq:06d}-*.json")
++    for p in sorted(glob.glob(pat)):
++        d = jread(p)
++        if d and d.get("Error"):
++            return str(d["Error"])
++    return ""
++
++
++def kit_window_fails(gen, doc):
++    """[(step, reason)] of GEN's failed steps from its terminal.json DOC: the rules of the watcher's WINDOW_RESULT event (tsp-hqm1p.179,
++    watch-runs.py window_fails). Per Attempt: the `PF_<TAG> ... result=FAIL [reason=<token>]` lines of the step's payload stdout (the
++    runner receipt says pass when the helper exited 0; the payload is the truth), else the receipt's Error, else its Outcome. StepRows
++    with outcome fail. A Reason that is neither normal nor the generic `failure` over named steps is a failing `window` step
++    (for `failure` itself, failure.json's Reason when the runner wrote one)."""
++    fails = []
++
++    def add(step, reason):
++        item = (re.sub(r"[\s,]+", "_", str(step or "-").strip())[:60] or "-", re.sub(r"[\s,]+", "_", str(reason or "fail").strip())[:80] or "fail")
++        if item not in fails:
++            fails.append(item)
++
++    attempts = sorted((a for a in doc.get("Attempts") or [] if isinstance(a, dict) and isinstance(a.get("Sequence"), int)), key=lambda a: a["Sequence"])
++    for a in attempts:
++        rid, seq = str(a.get("RequestID") or ""), a["Sequence"]
++        m = KIT_STEP_ID_RE.match(rid)
++        step = m.group(1) if m else ("boot-open" if GEN_RE.fullmatch(rid) else rid or f"step-{seq}")
++        pays = []
++        for pm in KIT_PAYLOAD_FAIL_RE.finditer(kit_step_stdout(gen, seq)):
++            r = KIT_PAYLOAD_REASON_RE.search(pm.group(0))
++            item = (pm.group(1), r.group(1) if r else "")
++            if item not in pays:
++                pays.append(item)
++        for tag, reason in pays:
++            add(step, reason or tag)
++        outcome = str(a.get("Outcome") or "").lower()
++        if outcome != "pass" and not pays:
++            add(step, kit_attempt_error(gen, seq) or outcome or "fail")
++    for row in doc.get("StepRows") or []:
++        if isinstance(row, dict) and str(row.get("outcome") or "").lower() == "fail":
++            step = re.sub(r"[\s,]+", "_", str(row.get("step") or "-").strip())[:60]
++            if not any(f[0] == step for f in fails):
++                add(row.get("step"), "fail")
++    reason = str(doc.get("Reason") or "")
++    if reason and reason not in KIT_NORMAL_REASONS and not (reason == "failure" and fails):
++        # the generic close reason `failure` with no failing step: the runner's own failure.json names why (R51: post_open_ops_pending)
++        named = (jread(os.path.join(KIT_WINDOWS, gen, "failure.json")) or {}).get("Reason") if reason == "failure" else None
++        add("window", named or reason)
++    return fails
++
++
++def kit_window_result(row, floor_ts):
++    """A collect_windows ROW -> its typed-result item, or None while the window is open/activating or closed before FLOOR_TS (epoch).
++    The close record by precedence (the order collect_windows reads them): a failed boot-open (BOOT_OPEN_FAILED); the runner's
++    terminal.json (its End, CLEAN / DIRTY; FAILED / FAILED_DIRTY when a step failed: the watcher's outcome rule); a failed runner with
++    no terminal.json (RUNNER_FAILED, failure.json's Reason); a revoked window; a closed session whose runner never finalized
++    (UNFINALIZED)."""
++    gen, st = row["gen"], row.get("state") or ""
++    if row.get("open"):
++        return None
++    gd = os.path.join(KIT_WINDOWS, gen)
++    out = {"kind": "kit-window", "gen": gen, "file": None, "path": None, "mtime": None, "at": None, "state": None, "reason": None,
++           "typed_cause": None, "lane_reason": None, "purpose": row.get("purpose"), "lane_hint": row.get("lane"), "boundary": None}
++    term_p = os.path.join(gd, "terminal.json")
++    term = None if st == "boot-open failed" else jread(term_p)
++
++    def source(path, at=None):
++        base = os.path.basename(path)
++        out["path"] = path
++        out["file"] = base.replace(gen, gen[:8]) if gen in base else f"{gen[:8]}/{base}"
++        try:
++            mt = os.path.getmtime(path)
++        except OSError:
++            mt = None
++        out["mtime"] = iso(mt)
++        out["at"] = at if parse_ts(at) else (iso(mt) if mt is not None else row.get("last_activity") or row.get("requested_at"))
++
++    if st == "boot-open failed":
++        p = os.path.join(KIT_WINDOWS, f"boot-open-{gen}.failed.json")
++        d = jread(p) or {}
++        source(p, d.get("At"))
++        out["state"], out["reason"] = "BOOT_OPEN_FAILED", str(d.get("Reason") or "boot_open_failed")
++    elif term is not None:
++        pac = term.get("PowerAtClose")
++        source(term_p, pac.get("ClosedAt") if isinstance(pac, dict) else None)
++        fails = kit_window_fails(gen, term)
++        end = re.sub(r"\W+", "_", str(term.get("End") or "-")).strip("_").upper() or "-"
++        out["state"] = ("FAILED_DIRTY" if end == "DIRTY" else "FAILED") if fails else (end if end != "-" else "UNKNOWN")
++        out["reason"] = str(term.get("Reason") or "") or None
++        out["lane_reason"] = str(term.get("LaneReason") or "") or None
++        out["purpose"] = term.get("KitPurpose") or out["purpose"]
++        shown = [f"{a}:{b}" for a, b in fails[:KIT_FAILS_MAX]]
++        if len(fails) > KIT_FAILS_MAX:
++            shown.append(f"+{len(fails) - KIT_FAILS_MAX}more")
++        out["typed_cause"] = ",".join(shown) or None
++    elif st == "failed":
++        p = os.path.join(gd, "failure.json")
++        d = jread(p)
++        source(p if d is not None else os.path.join(gd, "runner.json"), (d or {}).get("At"))
++        out["state"], out["reason"] = "RUNNER_FAILED", str((d or {}).get("Reason") or "runner_failed")
++    elif st == "revoked":
++        p = os.path.join(gd, "revoked.json")
++        d = jread(p) or {}
++        source(p, d.get("At"))
++        out["state"], out["reason"] = "REVOKED", str(d.get("Reason") or "revoked")
++    elif st == "session closed, runner not finalized":
++        source(os.path.join(gd, "runner.json"), row.get("last_activity"))
++        out["state"], out["reason"] = "UNFINALIZED", "runner_not_finalized"
++    else:
++        return None
++    at = parse_ts(out["at"])
++    return out if at is not None and at.timestamp() >= floor_ts else None
++
++
++def kit_windows_closed(floor_ts):
++    """Window dirs under KIT_WINDOWS whose terminal.json was modified since FLOOR_TS (epoch). A bare stat() scan on purpose: no JSON and
++    nothing of kit_window_result, so a change to a close record's contents cannot blank this count the way it blanks the rows."""
++    n = 0
++    try:
++        names = os.listdir(KIT_WINDOWS)
++    except OSError:
++        return 0
++    for name in names:
++        if GEN_RE.fullmatch(name):
++            try:
++                if os.stat(os.path.join(KIT_WINDOWS, name, "terminal.json")).st_mtime >= floor_ts:
++                    n += 1
++            except OSError:
++                pass
++    return n
++
++
+ def collect_typed_results(sent):
+-    """Last TYPED_RESULTS_WINDOW_H h of typed results, newest first, with the lane BENCH relayed each one to."""
+-    res = {"window_h": TYPED_RESULTS_WINDOW_H, "root": TYPED_RESULTS_ROOT, "depth": TYPED_RESULTS_DEPTH,
+-           "items": [], "groups": [], "total": 0, "error": None}
++    """Last TYPED_RESULTS_WINDOW_H h of typed results, newest first, with the lane BENCH relayed each one to.
++    Two sources: the kit windows' close records (kit_window_result over collect_windows rows) and the result files under
++    TYPED_RESULTS_ROOT (read_typed). 2026-11-08 (tsp-hqm1p.181): a source that yields no row while windows closed (terminal.json files
++    modified in the window, counted by kit_windows_closed) is a WARN in res["warns"]. The files source went blank on 11-03 when the
++    kit-window-runner pipeline replaced BENCH-RESULT*.json, and nothing said so for five days."""
++    res = {"window_h": TYPED_RESULTS_WINDOW_H, "root": TYPED_RESULTS_ROOT, "depth": TYPED_RESULTS_DEPTH, "windows_root": KIT_WINDOWS,
++           "items": [], "groups": [], "total": 0, "error": None, "by_kind": {}, "windows_closed": 0, "warns": []}
++    floor = NOW.timestamp() - TYPED_RESULTS_WINDOW_H * 3600
++    errors, items = [], []
++    try:
++        for row in collect_windows(lookback_h=TYPED_RESULTS_WINDOW_H + TYPED_REQUEST_SLACK_H):
++            try:
++                it = kit_window_result(row, floor)
++            except Exception as ex:   # a window whose record cannot be read is a visible row, not a missing one
++                it = {"kind": "kit-window", "gen": row.get("gen"), "file": (row.get("gen") or "")[:8], "path": None, "mtime": None,
++                      "at": row.get("requested_at"), "state": "UNREAD", "reason": f"{type(ex).__name__}: {str(ex)[:120]}",
++                      "typed_cause": None, "lane_reason": None, "purpose": row.get("purpose"), "lane_hint": row.get("lane"), "boundary": None}
++            if it:
++                items.append(it)
++    except Exception as ex:
++        errors.append(f"kit windows: {type(ex).__name__}: {str(ex)[:160]}")
+     # -H: /home/matt/recovery is a symlink to the programming tree; follow the starting point only
+     rc, out, e = run_cmd(["find", "-H", TYPED_RESULTS_ROOT, "-maxdepth", str(TYPED_RESULTS_DEPTH),
+-                          "(", "-name", "BENCH-RESULT*.json", "-o", "-name", "DEPLOY-RECEIPT*.txt", ")",
++                          "(", "-name", "BENCH-RESULT*.json", "-o", "-name", "DEPLOY-RECEIPT*.txt", "-o", "-name", "*BENCH-RESULT*.txt", ")",
+                           "-type", "f", "-mmin", f"-{TYPED_RESULTS_WINDOW_H * 60}", "-printf", "%T@\t%p\n"], 60)
+     if rc != 0 and not out.strip():
+-        res["error"] = f"find rc={rc}: {e.strip()[:200]}"
+-        err("typed results", res["error"])
+-        return res
++        errors.append(f"find rc={rc}: {e.strip()[:200]}")
++        out = ""
+     relayed_to = {}
+     for pair, v in (sent or {}).items():
+         if isinstance(v, dict) and lane_base(str(v.get("from") or "")) == "BENCH" and v.get("file"):
+             relayed_to.setdefault(os.path.realpath(str(v["file"])), pair.split(" ", 1)[0])
+-    items = []
+     for line in out.splitlines():
+         t, _, path = line.partition("\t")
+         try:
+@@ -811,6 +1036,11 @@
+         it = read_typed(path, mtime)
+         it["lane"] = relayed_to.get(os.path.realpath(path))
+         items.append(it)
++    for it in items:
++        it.setdefault("lane", None)
++    if errors:
++        res["error"] = "; ".join(errors)
++        err("typed results", res["error"])
+     items.sort(key=lambda x: x.get("at") or "", reverse=True)
+     groups = {}
+     for it in items:
+@@ -822,9 +1052,18 @@
+         lane = it["lane"] or it.get("lane_hint")
+         if lane and lane not in g["lanes"]:
+             g["lanes"].append(lane)
++        res["by_kind"][it["kind"]] = res["by_kind"].get(it["kind"], 0) + 1
+     res["groups"] = sorted(groups.values(), key=lambda g: (g["count"], g["latest_at"] or ""), reverse=True)
+     res["total"] = len(items)
+     res["items"] = items[:TYPED_RESULTS_SHOW]
++    res["windows_closed"] = closed = kit_windows_closed(floor)
++    if closed:
++        n_win = res["by_kind"].get("kit-window", 0)
++        for source, n_rows, what in (("kit-window", n_win, f"the kit-window close records under {KIT_WINDOWS}"),
++                                     ("files", res["total"] - n_win, f"the BENCH-RESULT / DEPLOY-RECEIPT files under {TYPED_RESULTS_ROOT}")):
++            if n_rows == 0:
++                res["warns"].append({"source": source, "windows_closed": closed,
++                                     "text": f"{what} yielded 0 rows, so the format they are read in may have changed"})
+     return res
+ 
+ 
+@@ -852,10 +1091,10 @@
+     return out
+ 
+ 
+-def collect_windows():
+-    """pf-kit-window-runner generations requested in the last BENCH_QUEUE_WINDOW_H hours, newest first."""
++def collect_windows(lookback_h=None):
++    """pf-kit-window-runner generations requested in the last LOOKBACK_H (default BENCH_QUEUE_WINDOW_H) hours, newest first."""
+     rows = []
+-    cutoff = NOW.timestamp() - BENCH_QUEUE_WINDOW_H * 3600
++    cutoff = NOW.timestamp() - (lookback_h or BENCH_QUEUE_WINDOW_H) * 3600
+     try:
+         names = os.listdir(KIT_WINDOWS)
+     except FileNotFoundError:
+@@ -1104,7 +1343,7 @@
+         if a:
+             ans = {"to": a["to"], "file": a["file"], "at": a["at"], "state": None, "reason": None, "typed_cause": None}
+             fb = os.path.basename(a["file"])
+-            if (fb.startswith("BENCH-RESULT") and fb.endswith(".json")) or (fb.startswith("DEPLOY-RECEIPT") and fb.endswith(".txt")):
++            if typed_result_name(fb):
+                 try:
+                     tr = read_typed(a["file"], os.path.getmtime(a["file"]))
+                     ans.update(state=tr["state"], reason=tr["reason"], typed_cause=tr["typed_cause"])
+@@ -2702,7 +2941,8 @@
+                    "kit_running": bool(dev["windows_open"]), "windows_open": len(dev["windows_open"]),
+                    "bench_state": (dev["bench"] or {}).get("state"),
+                    "bench_verdict": ((dev["bench"] or {}).get("last_status") or {}).get("verdict"),
+-                   "queue_total": len(dev["queue"]), "results_24h": (dev["results"] or {}).get("total", 0)},
++                   "queue_total": len(dev["queue"]), "results_24h": (dev["results"] or {}).get("total", 0),
++                   "results_warn": len((dev["results"] or {}).get("warns") or [])},
+         "needs_by_kind": {k: sum(1 for n in needs if n["kind"] == k) for k in KIND_RANK},
+         "beads_in_scope_in_progress": sum(1 for i, b in index.items() if in_scope(i) and b["status"] == "in_progress"),
+         "beads_in_scope_open": sum(1 for i, b in index.items() if in_scope(i) and b["status"] == "open"),
+--- a/render.py
++++ b/render.py
+@@ -385,15 +385,22 @@
+ 
+ def typed_sev(state):
+     s = (state or "").upper()
+-    return "good" if s in ("PASS", "OK", "SUCCESS", "CLEAN", "DONE") else ("warn" if s in ("REFUSED", "SKIPPED", "WAITING") else ("muted" if not s else "crit"))
++    return ("good" if s in ("PASS", "OK", "SUCCESS", "CLEAN", "DONE") else ("warn" if s in ("REFUSED", "SKIPPED", "WAITING", "PARTIAL")
++            else ("muted" if not s or s == "UNCLASSIFIED" else "crit")))
+ 
+ 
+ def render_results(d):
+-    """2026-11-02 (tsp-mc9m.60.29.84.14): typed BENCH-RESULT / DEPLOY-RECEIPT outcomes of the last 24 h."""
++    """2026-11-02 (tsp-mc9m.60.29.84.14): typed outcomes of the last 24 h. 2026-11-08 (tsp-hqm1p.181): kit-window close records plus the
++    BENCH-RESULT / DEPLOY-RECEIPT files; a source that yielded no row while windows closed is a visible WARN, not an empty-looking section."""
+     r = (d.get("device") or {}).get("results") or {}
+     parts = []
+     if r.get("error"):
+         parts.append(f'<p class="empty">Typed results unreadable: {e(r["error"])}</p>')
++    warns = r.get("warns") or []
++    for w in warns:
++        n = w.get("windows_closed") or 0
++        parts.append(f'<div class="banner banner-warn"><strong>Result source empty but {e(n)} window{"" if n == 1 else "s"} closed</strong> '
++                     f'in the last {e(r.get("window_h"))} h: {e(w.get("text"))}.</div>')
+     groups = r.get("groups") or []
+     if groups:
+         rows = "".join(
+@@ -411,16 +418,21 @@
+             f'<td class="num">{e(short_ts(it.get("at")))}</td><td>{mono(it.get("lane") or it.get("lane_hint"), "lane")}</td>'
+             f'<td>{chip(it.get("state") or "–", typed_sev(it.get("state")))}</td>'
+             f'<td><span class="raw" title="{e(it.get("path"))}">{e(it.get("file"))}</span><div class="sub">{e(it.get("reason") or "")}'
+-            + (f' · {e(it.get("typed_cause"))}' if it.get("typed_cause") else "") + '</div></td></tr>'
++            + (f' · {e(it.get("typed_cause"))}' if it.get("typed_cause") else "")
++            + (f' · lane reason {e(it.get("lane_reason"))}' if it.get("lane_reason") else "") + '</div></td></tr>'
+             for it in items)
+         parts.append(f'<details class="more"><summary>{len(items)} of {e(r.get("total"))} result files, newest first</summary>'
+                      '<div class="scroll"><table class="grid"><thead><tr><th class="num">At</th><th>Lane</th><th>State</th><th>File · reason · cause</th></tr></thead><tbody>'
+                      + rows + "</tbody></table></div></details>")
+-    elif not r.get("error"):
++    elif not r.get("error") and not warns:
+         parts.append(f'<p class="empty">No typed result in the last {e(r.get("window_h"))} h.</p>')
+-    parts.append(f'<p class="fine">BENCH-RESULT*.json and DEPLOY-RECEIPT*.txt under {mono(r.get("root"))} (depth {e(r.get("depth"))}) modified in the last '
+-                 f'{e(r.get("window_h"))} h, grouped by State / Reason / TypedCause (v1 results: Outcome, Failure.Error). Lane = the lane BENCH relayed the file to, '
+-                 'else the file\'s own lane or discriminator.</p>')
++    kinds = " · ".join(f'{e(n)} {e(k)}' for k, n in sorted((r.get("by_kind") or {}).items(), key=lambda kv: -kv[1]))
++    parts.append(f'<p class="fine">Kit windows: the close record (terminal.json, a failed boot-open, a failed runner) of the generations under {mono(r.get("windows_root"))} '
++                 f'closed in the last {e(r.get("window_h"))} h; State = the window\'s End, FAILED / FAILED_DIRTY when a step failed, Typed cause = the failing steps. '
++                 f'Files: *BENCH-RESULT*.txt (lane notes, State from the Outcome line), BENCH-RESULT*.json (v1: Outcome, Failure.Error) and DEPLOY-RECEIPT*.txt under '
++                 f'{mono(r.get("root"))} (depth {e(r.get("depth"))}) modified in the last {e(r.get("window_h"))} h. Grouped by State / Reason / TypedCause. '
++                 f'Lane = the lane BENCH relayed the file to, else the window\'s lane or the file\'s own lane or discriminator. '
++                 f'{e(r.get("windows_closed", 0))} windows closed in the window' + (f' · rows: {kinds}' if kinds else '') + '.</p>')
+     return "".join(parts)
+ 
+ 
+@@ -730,7 +742,7 @@
+     roots = " ".join(mono(r) for r in d.get("campaign_roots", []))
+     parts.append(f'<p class="fine">Scope roots: {roots}</p>')
+     parts.append(f'<p class="fine thresholds">Thresholds: {ths}</p>')
+-    parts.append(f'<p class="fine">Sources: bd list --all / bd ready / bd comments (stale candidates, and hardware-row anchors when their comment count moves); hardware-rows.json; gpu-16 runs/active.tsv + pf-task run.status per run on its home (read-only) + runs/receipts-&lt;NAME&gt;.jsonl (G16 status lines); gh pr view for referenced PRs; shared-refresh.json (pf-shared-refresh checkout status); systemctl --user show pf-kit-window-runner.service, kit-windows/, runs/relay-sent.json and typed BENCH-RESULT / DEPLOY-RECEIPT files; pf-owner-intake.sh list. The window queue, queue.tsv and gpu14-owner-questions.md are retired and not read. Collected on {e(d.get("host"))} in {e(d.get("runtime_s"))} s. Generated by /home/matt/recovery/gpu14/fleet-board/refresh.sh.</p>')
++    parts.append(f'<p class="fine">Sources: bd list --all / bd ready / bd comments (stale candidates, and hardware-row anchors when their comment count moves); hardware-rows.json; gpu-16 runs/active.tsv + pf-task run.status per run on its home (read-only) + runs/receipts-&lt;NAME&gt;.jsonl (G16 status lines); gh pr view for referenced PRs; shared-refresh.json (pf-shared-refresh checkout status); systemctl --user show pf-kit-window-runner.service, kit-windows/, runs/relay-sent.json and typed kit-window close records and BENCH-RESULT / DEPLOY-RECEIPT files; pf-owner-intake.sh list. The window queue, queue.tsv and gpu14-owner-questions.md are retired and not read. Collected on {e(d.get("host"))} in {e(d.get("runtime_s"))} s. Generated by /home/matt/recovery/gpu14/fleet-board/refresh.sh.</p>')
+     return "".join(parts)
+ 
+ 
+@@ -893,6 +905,7 @@
+ /* device */
+ .banner { padding: 10px 12px; border: 1px solid var(--rule); margin-bottom: 10px; }
+ .banner-crit { border-color: var(--crit); background: var(--crit-bg); color: var(--crit-ink); }
++.banner-warn { border-color: var(--warn); background: var(--warn-bg); color: var(--warn-ink); }
+ .running { background: var(--surface); border: 1px solid var(--rule); border-left: 5px solid var(--good); padding: 10px 12px; }
+ .running.idle { border-left-color: var(--rule); }
+ .running-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+@@ -1108,6 +1121,9 @@
+         sev, v = ("warn" if dev.get("pending") else "info"), "idle"
+     dd = (f'{dev.get("pending", 0)} of {dev.get("queue_total", 0)} requests without a result · BENCH {dev.get("bench_state") or "?"}'
+           + (f' ({dev["bench_verdict"]})' if dev.get("bench_verdict") else "") + f' · {dev.get("results_24h", 0)} results 24 h')
++    if dev.get("results_warn"):   # tsp-hqm1p.181: a blank result source is visible on the tile, not only inside the section
++        dd += f' · {dev["results_warn"]} result source{"" if dev["results_warn"] == 1 else "s"} empty while windows closed'
++        sev = "warn" if sev == "info" else sev
+     return sev, v, dd
+ 
+ 
+@@ -1193,7 +1209,8 @@
+     body.append(section("device", "Device bench", dev.get("pending", 0), render_device(d),
+                         "one A133 handheld, strictly serial: the BENCH lane drives pf-kit-window-runner; queue = each lane's latest request to BENCH"))
+     body.append(section("results", "Bench results (typed, 24 h)", dev.get("results_24h", 0), render_results(d),
+-                        "BENCH-RESULT / DEPLOY-RECEIPT outcomes grouped by State / Reason / TypedCause"))
++                        "kit-window close records and BENCH-RESULT / DEPLOY-RECEIPT files grouped by State / Reason / TypedCause"
++                        + (f' · WARN: {dev["results_warn"]} result source(s) empty while windows closed' if dev.get("results_warn") else "")))
+     body.append(section("stale", "Stale in-progress beads", s["stale"], render_stale(d),
+                         f'in_progress, in scope, no lane, no update or comment for {th["STALE_BEAD_H"]} h', open_=bool(s["stale"])))
+     if "backlog" in d:
