@@ -37,6 +37,10 @@ sys.path.insert(0, _HERE)
 import collect  # noqa: E402
 import render  # noqa: E402
 
+# collect.py runs bd and the owner intake with cwd=MC (/home/matt/mission-control): use the temp tree, so the tests do
+# not depend on that directory existing (CI runners have no mission-control checkout).
+collect.MC = _TMP
+
 NOW = collect.NOW
 OLD_PARK = NOW - dt.timedelta(hours=collect.PARK_MAX_H + 8)
 RUN = "pft-" + "a" * 24
