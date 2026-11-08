@@ -93,13 +93,7 @@ for set in "$WT"/"$bead" "$WT"/"$bead"-* "$WT"/mc-"$bead"; do
   fi
 done
 if [ "$blocked" -gt 0 ]; then
-  # 2026-10-25 gpu-14: say which kind of blocker it was; an unmapped set alone (no gpu-14 admission at all, e.g. a
-  # pf-wt tree made for a Claude fixer subagent) is cleared with BD_CLOSE_FOREIGN_OK, not with release-run.sh.
-  if [ -z "$(printf '%s' "$cands" | tr -d '[:space:]')" ]; then
-    echo "BD_CLOSE_SAFE_REFUSED reason=unmapped_worktree_set_only bead=$bead count=$blocked hint=no gpu-14 admission owns these sets; if they are yours (fixer subagent) and clean+merged, rerun with BD_CLOSE_FOREIGN_OK='<who confirmed>'"
-  else
-    echo "BD_CLOSE_SAFE_REFUSED reason=unreleased_run_owns_bead_worktree bead=$bead count=$blocked hint=release each run with release-run.sh (read rc) first"
-  fi
+  echo "BD_CLOSE_SAFE_REFUSED reason=unreleased_run_owns_bead_worktree bead=$bead count=$blocked hint=release each run with release-run.sh (read rc) first"
   exit 3
 fi
 if [ "${#kept[@]}" -eq 0 ]; then
