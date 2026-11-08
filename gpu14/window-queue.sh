@@ -89,6 +89,9 @@ declare -a ovenv=() runner_env=() preflight_timeout=()
 ACTIVE_RUNNER_PUBLICATION=${PF_KIT_ACTIVE_RUNNER_PUBLICATION:-$HOME/.local/state/pocketforge/kit-window-runner/active-clone.json}
 POST_CLOSE_USB=${WQ_POST_CLOSE_USB:-$SELF/post-close-usb-check.sh}
 POLL=${WQ_POLL_S:-30}; MAXWIN=${WQ_WINDOW_MAX_S:-10800}
+# runner_deploy_pending (a coordinator runner deploy is draining boot-opens) is a WAIT: retry every DEPLOY_PENDING_S,
+# give up (normal boot_open_failed STOP) after DEPLOY_PENDING_MAX (the drain marker's own 3 h ceiling).
+DEPLOY_PENDING_S=${WQ_DEPLOY_PENDING_S:-30}; DEPLOY_PENDING_MAX=${WQ_DEPLOY_PENDING_MAX_S:-10800}; DEPLOY_PENDING_SINCE=
 OB_SAMPLE_S=${WQ_OWNER_SAMPLE_S:-300}; OB_TRANSIENT_MAX_S=${WQ_OWNER_TRANSIENT_MAX_S:-1800}
 OB_TRANSIENT_REASONS=${WQ_OWNER_TRANSIENT_REASONS:-child_processes_after_turn}  # the one bounded wait lane-drive.sh waits out
 [[ $OB_SAMPLE_S =~ ^[0-9]+$ ]] || OB_SAMPLE_S=300; [[ $OB_TRANSIENT_MAX_S =~ ^[0-9]+$ ]] || OB_TRANSIENT_MAX_S=1800
@@ -514,8 +517,11 @@ recheck_identity_only() {  # recheck_identity_only <composed report>: rc 0 = liv
   printf '%s\n' "$out" | grep -q '^KIT_PREFLIGHT result=PASS' || return 1
   case $summary in
     "KIT_PREFLIGHT result=REFUSED failed=ADMISSION reason=runner_authority_mismatch typed_cause=automation_repository_mismatch "*|\
-    "KIT_PREFLIGHT result=REFUSED failed=ADMISSION reason=runner_authority_mismatch typed_cause=automation_head_mismatch "*) return 0 ;;
-  esac
+    "KIT_PREFLIGHT result=REFUSED failed=ADMISSION reason=runner_authority_mismatch typed_cause=automation_head_mismatch "*|\
+    "KIT_PREFLIGHT result=REFUSED failed=ADMISSION reason=runner_authority_mismatch typed_cause=execution_runner_env_not_live "*|\
+    "KIT_PREFLIGHT result=REFUSED failed=ADMISSION reason=runner_authority_mismatch typed_cause=execution_runner_not_live "*) return 0 ;;
+  esac  # tsp-mc9m.60.29.84.61: a request COMMAND through the old clone is text the rebind rewrites; package code
+        # through it (package_runner_not_live:<file>) is not, so that one goes back to the lane
   return 1
 }
 recheck_request_file() {  # recheck_request_file <pkg>: the single sealed DEVICE_REQUEST.md, resolved as kit-admission-check.sh L2 does
@@ -1586,6 +1592,7 @@ process_row() {
   say "CHAIN start gen=$G label=$LABEL"
   run_helper chain "$chain_log" "${cenv[@]}" "$CHAIN" "$P" "$G" "$OWNER" "$TOKEN" "$STEPS" "$LABEL" "$note"
   crc=$HELPER_RC
+  grep -q 'PF_KIT_WINDOW_RUNNER_REFUSED reason=runner_deploy_pending' "$chain_log" 2>/dev/null || DEPLOY_PENDING_SINCE=
   if [ "$crc" = 0 ] && grep -q 'NETREADY_WATCH_SENT' "$chain_log"; then
     record_rootfs_recovery_tally
     BOOT_OPEN_FAILURES=0; BOOT_STREAK_GEN=; set_boot_streak 0 - || stop boot_open_state_unreadable "could not reset $BOOT_STREAK after successful boot-open"
@@ -1596,6 +1603,17 @@ process_row() {
     stop handoff_failed "window $G is OPEN but the handoff failed rc=$crc: $(grep -E 'CHAIN_STOP|_REFUSED|_STOP' "$chain_log" | tail -1 | cut -c1-200) log=$chain_log (resume with WINDOW_CHAIN_FROM=fill or close it)"
   elif grep -q 'CHAIN boot-open start' "$chain_log"; then
     why=$(grep -oE 'PF_KIT_RESUME_REFUSED reason=[A-Za-z0-9_]+' "$chain_log" | head -1 | cut -d= -f2); [ -n "$why" ] || why=$(grep -oE 'PF_KIT_WINDOW_RUNNER_REFUSED reason=[A-Za-z0-9_]+' "$chain_log" | head -1 | cut -d= -f2)
+    if [ "${why,,}" = runner_deploy_pending ]; then
+      # The runner refused BEFORE touching state or the device (drain marker, tsp-mc9m.60.29.84.46): not a failure, not a
+      # breaker count. Return the row to the head and retry after the deploy; past the ceiling fall through to the STOP.
+      [ -n "$DEPLOY_PENDING_SINCE" ] || DEPLOY_PENDING_SINCE=$(date +%s)
+      if [ $(( $(date +%s) - DEPLOY_PENDING_SINCE )) -lt "$DEPLOY_PENDING_MAX" ]; then
+        requeue_or_stop; active_remove
+        say "DEPLOY_PENDING gen=$G a coordinator runner deploy is draining boot-opens; row returned to head, retry in ${DEPLOY_PENDING_S}s"
+        snooze "$DEPLOY_PENDING_S"; return 0
+      fi
+      say "DEPLOY_PENDING_TIMEOUT gen=$G still draining after ${DEPLOY_PENDING_MAX}s; treating as a boot-open failure"
+    fi
     node_why=; [ "${why^^}" != BASE_BOOT_FAILED ] || node_why=$(node_failure < "$chain_log")
     fail_row boot_open_failed "${why:-unknown}" "$node_why"
     failure_class=$(boot_open_class "${why:-}" "$node_why")
