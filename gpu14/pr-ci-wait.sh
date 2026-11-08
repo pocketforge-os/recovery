@@ -26,6 +26,12 @@ while :; do
       echo "CI_DONE $repo#$num GREEN | $counts"; exit 0
     fi
   fi
+  # 2026-10-25 (#1798 4cea55e4): GitHub creates no pull_request workflow runs while the PR conflicts with its base,
+  # so "no checks" idled here for 2 h. With zero checks, read mergeable and stop on CONFLICTING; close/reopen cannot fix it.
+  if [ -z "$out" ]; then
+    mg=$(gh pr view "$num" -R "$repo" --json mergeable,mergeStateStatus,headRefOid -q '.mergeable+" "+.mergeStateStatus+" "+.headRefOid' 2>/dev/null)
+    case "$mg" in CONFLICTING*) echo "CI_BLOCKED $repo#$num reason=pr_conflicting_no_workflow_runs mergeable=${mg%% *} head=${mg##* } hint=merge_base_into_branch"; exit 0;; esac
+  fi
   [ "$(date +%s)" -lt "$deadline" ] || { echo "CI_TIMEOUT $repo#$num after ${max_min} min | ${counts:-no data}"; exit 0; }
   sleep 90
 done

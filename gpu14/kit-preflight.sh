@@ -4,13 +4,15 @@
 # windows (15.3 bench-h) in the kit-window era; about a third were package faults that a static look at the staged
 # package would have caught BEFORE the 18-20 min flash (906a2b22 stale bootstrap, 15c76b27 wrong profile, 8776c285 plan
 # without executor, 1e8b34d5 dir 0755, 6c30f32b/80401167 owner budget, pft-8819 released owner). This is v1 of the F
-# proposal: C1 seal, C2 image (+ C2deny, C2store), C3 entrypoints, C7 owner. C4 rootfs rehearsal, C5 ABI, C6 arm order, C8 bench
-# contract and C9 prediction are NOT here yet (gpu-14 keeps the lockup-last/Build-16/prediction judgement by hand).
+# proposal: C1 seal, C2 image (+ C2deny, C2store), C3 entrypoints, C4 rootfs rehearsal, C7 owner. C5 ABI, C6 arm order, C8
+# bench contract and C9 prediction are NOT here yet (gpu-14 keeps the lockup-last/Build-16/prediction judgement by hand).
 #
-# Everything here is read-only: no stage, no seed handle, no node, no device, no runner state. Network/pf-task reads are
+# Everything here is read-only except C4's create-once receipt: no stage, no seed handle, no node, no device, no runner
+# state. Network/pf-task reads are
 # the same read-only probes window-chain.sh already makes (pf-task-run-home resolve, run.status, the chain's own
 # PF_WINDOW_CHAIN_OWNER_ROUTE_CHECK_ONLY mode), plus C2store's bounded GETs on the read-only artifact store. It never
-# edits the package (python runs with -B: no __pycache__); scratch files live only in a mktemp dir it removes.
+# edits the package (python runs with -B: no __pycache__); scratch files live only in a mktemp dir it removes, and C4
+# writes its admission receipt under the configured root-owned receipt directory.
 #
 # usage: kit-preflight.sh <package-dir> <generation> <owner-run> [step-count]
 #   step-count: when given, window-owner-budget-check.sh runs too (v2 homes; v3 prints NOT_APPLICABLE).
@@ -33,13 +35,19 @@
 #   IMAGE_PATHS=none       the window executes no /opt/pocketforge path, so checked=0 is a real PASS (7 of 9 image
 #                          PASS lines on 10-16 were a vacuous checked=0).
 #   IMAGE=<path>           a local raw image to verify against RawSHA256 when it is not package-local or in build*-publish.
+#   C4_PLAN=<path>         sealed relative path to a pocketforge.kit-rootfs-rehearsal/v1 plan. Undeclared, C4 reports
+#                          SKIP (full load); a declared value that is not such a sealed plan FAILs C4 (one pinned pre-C4
+#                          package keeps its full load).
+#                          The receipt $R/c4-receipts/<generation>.json is create-once: a re-run reuses a receipt
+#                          that binds this generation, seal, plan and image, and fails on any other receipt.
 #   STEP_DRIVEN=<n>        no entrypoint: the lane drives exactly n step requests, all declared with STEP= (C3)
 #   STEP=<path>            a pre-built step request (relative to the package) to run through the deployed
 #                          `pf-kit-step --check` (pure static: no generation argument, no window state; read 2026-10-16).
 #
 # Test seams: GPU14_ROOT, PF_KIT_WINDOWS_DIR, PF_WINDOW_RUNNER_REPO, KP_RUN_HOME, KP_IMAGE_PATH_CHECK, KP_CHAIN, KP_BUDGET,
 # KP_DENYLIST, KP_PUBLISH_ROOT, KP_PLAN_PREFIX (default /home/matt/recovery/, the chain's plan-path prefix), KP_ARTIFACT_BASE
-# (default http://10.0.40.90:8790/artifacts/sha256, the node's PF_RECOVER_ARTIFACT_BASE).
+# (default http://10.0.40.90:8790/artifacts/sha256, the node's PF_RECOVER_ARTIFACT_BASE), KP_C4_RUNNER,
+# KP_C4_RECEIPTS_DIR and KP_C19_TIMEOUT (seconds, default 60).
 set -uo pipefail
 unset -f grep 2>/dev/null || true
 P=${1:-}; G=${2:-}; OWNER=${3:-}; STEPS=${4:-}
@@ -54,13 +62,13 @@ BUDGET=${KP_BUDGET:-$R/window-owner-budget-check.sh}
 DENY=${KP_DENYLIST:-$R/image-denylist.txt}
 PUB=${KP_PUBLISH_ROOT:-$R}
 STORE=${KP_ARTIFACT_BASE:-http://10.0.40.90:8790/artifacts/sha256}; STORE=${STORE%/}
-FAILED=(); OVERRIDES=(); RAW=""; PATHS_EXEMPT=0; CHAIN_PATHS_OK=""
+FAILED=(); OVERRIDES=(); RAW=""; IMAGE=""; C2_RECEIPT=""; C2_RECEIPT_SHA=""; PATHS_EXEMPT=0; CHAIN_PATHS_OK=""
 clean() { printf '%s' "$1" | tr -d '\r\n"' | tr '\t' ' ' | cut -c1-300; }
 emit() {  # emit <id> <PASS|FAIL|SKIP> <reason>
   local id=$1 res=$2 why=$3 var="KIT_PREFLIGHT_OVERRIDE_$1" ov
   ov=${!var:-}
   if [ "$res" = FAIL ] && [ -n "$ov" ]; then
-    if [ "$id" = C2deny ] || [ "$id" = C9 ] || [ "$id" = C10 ] || [ "$id" = C11 ] || [ "$id" = C13 ]; then why="$why override_refused=not_overridable"
+    if [ "$id" = C2deny ] || [ "$id" = C4 ] || [ "$id" = C9 ] || [ "$id" = C10 ] || [ "$id" = C11 ] || [ "$id" = C13 ] || [ "$id" = C14 ] || [ "$id" = C15 ] || [ "$id" = C16 ] || [ "$id" = C18 ] || [ "$id" = C19 ] || [ "$id" = C20 ] || [ "$id" = C21 ]; then why="$why override_refused=not_overridable"
     elif [ "${#ov}" -lt 10 ]; then why="$why override_refused=reason_too_short"
     else
       echo "KIT_PREFLIGHT check=$id result=PASS reason=override:$why override=\"$(clean "$ov")\""
@@ -75,6 +83,21 @@ join() { local IFS=,; echo "${*:-}"; }
 decl() { [ -f "$P/PREFLIGHT" ] && sed -n "s/^$1=//p" "$P/PREFLIGHT" | tr -d '\r'; }
 # The runner deploy clone the live service runs (same resolution as window-chain.sh; read-only `systemctl show`).
 D=${PF_WINDOW_RUNNER_REPO:-$(systemctl --user show pf-kit-window-runner.service -p Environment --value 2>/dev/null | tr ' ' '\n' | sed -n 's/^PF_KIT_AUTOMATION_REPO=//p')}
+
+# gpu-14 2026-10-25 (panel g9 af5b29d1): a pin newer than the runner clone's objects failed C9/C18 with no next step, and a
+# lane worker then fetch+fast-forward MERGED main into the live runner clone (HEAD 3e96c8e1 -> ec2344ab, 13:32Z), which
+# changed the runner's code outside the deploy train. The runner clone's HEAD IS the deploy: never merge, checkout or
+# reset it. The sanctioned object source is the same objects-only fetch window-chain.sh runs at boot-open.
+runner_has_pin() { # <40-hex sha>: 0 if the commit is (or becomes) reachable in $D; HEAD must not move
+  local s=$1 h0 h1
+  git -C "$D" cat-file -e "$s^{commit}" 2>/dev/null && return 0
+  h0=$(git -C "$D" rev-parse HEAD 2>/dev/null) || return 1
+  git -C "$D" fetch -q origin main 2>/dev/null
+  h1=$(git -C "$D" rev-parse HEAD 2>/dev/null)
+  [ "$h0" = "$h1" ] || { echo "kit-preflight: runner_head_moved_during_fetch $h0 -> $h1 runner=$D" >&2; return 1; }
+  git -C "$D" cat-file -e "$s^{commit}" 2>/dev/null
+}
+UNREACH_HINT="(the pin is not on origin/main: push or re-seal at a main commit; NEVER fetch+merge, checkout or reset the runner clone, its HEAD is the deploy)"
 
 # ---------------------------------------------------------------- C1 seal
 C1_MANIFEST_OK=0
@@ -103,6 +126,21 @@ c1() {
   # lane-ssh/ is runtime output of network-ready: it must not exist before the window, on disk or in the manifest.
   if [ -e "$P/lane-ssh" ] || [ -L "$P/lane-ssh" ] || compgen -G "$P/.lane-ssh-new-*" >/dev/null; then why+=("lane_ssh_preexists"); fi
   grep -qE '^[0-9a-f]{64} [ *]?(\./)?(lane-ssh/|\.lane-ssh-new)' "$P/ARTIFACT-SHA256SUMS" 2>/dev/null && why+=("lane_ssh_sealed_in_manifest")
+  # 2026-10-24 gpu-14 (rtx11 62caf58a): stage/ is rewritten by the runner's stage step (disposition=restaged), so a
+  # manifest that seals stage/* passes here and is then refused package_manifest_invalid at fill, after a full FEL boot.
+  grep -qE '^[0-9a-f]{64} [ *]?(\./)?stage/' "$P/ARTIFACT-SHA256SUMS" 2>/dev/null && why+=("stage_sealed_in_manifest")
+  # 2026-10-20 gpu-14: mirror pf_kit_window_runner.boot_open's shape check (l7inv 06d6fceb was refused
+  # boot_open_request_invalid: a stale template carried Window.WindowSeconds; the window keys must be exactly
+  # OwnerRun/Lane/CapabilityID and WindowSeconds/IdleSeconds are top-level ints). glesproof 80e6097f was refused
+  # RESUME_REQUEST_INVALID: pf_kit_session_resume requires BaseKitDirectory (sealed base kit) for a live boot.
+  if [ -f "$P/boot-open-request.template.json" ]; then
+    python3 -I -c 'import json,os,sys
+d=json.load(open(sys.argv[1])); w=d.get("Window")
+ok=type(w) is dict and set(w)=={"OwnerRun","Lane","CapabilityID"}
+ok=ok and all(type(d[k]) is int for k in ("WindowSeconds","IdleSeconds") if k in d)
+b=d.get("BaseKitDirectory"); ok=ok and isinstance(b,str) and os.path.isabs(b) and os.path.isdir(b)
+sys.exit(0 if ok else 1)' "$P/boot-open-request.template.json" 2>/dev/null || why+=("boot_open_template_shape_invalid")
+  fi
   if [ -f "$P/STAGE.py" ]; then fmt=stagepy
   elif jq -e '.FelBootRequest=="@STAGE_FROM_SEED_KIT@"' "$P/boot-open-request.template.json" >/dev/null 2>&1; then fmt=native
   else fmt=unknown; why+=("unknown_package_format"); fi
@@ -177,9 +215,13 @@ c2() {
     emit C2 FAIL "image_sha256_mismatch path=$cand want=${RAW:0:12} got=${got:0:12}"; return
   done
   if [ -z "$img" ]; then emit C2 FAIL "no_local_image raw=${RAW:0:12} hint=add_its_build*-publish_dir_or_declare_IMAGE="; return; fi
+  IMAGE=$img
   for c in "$(dirname "$img")"/receipt-*.json "$PUB"/build*-publish/receipt-*.json; do
     [ -f "$c" ] && grep -q "$RAW" "$c" 2>/dev/null && { receipt=$c; break; }
   done
+  if [ "$receipt" != none ] && [ -f "$receipt" ] && [ ! -L "$receipt" ]; then
+    C2_RECEIPT=$receipt; C2_RECEIPT_SHA=$(sha256sum < "$receipt" | cut -d' ' -f1)
+  fi
   # Image paths: the same set window-chain.sh checks, minus prepare-created CREATES paths.
   mapfile -t IPATHS < <(image_scan_paths)
   if [ ${#IPATHS[@]} -eq 0 ]; then
@@ -222,6 +264,82 @@ c2() {
     CHAIN_PATHS_OK="kit-preflight $G: missing $(join "${exempt[@]}") are created by the package's prepare step (sealed PREFLIGHT CREATES=)"
   fi
   emit C2 PASS "image=$img verified_by=$how receipt=$(basename "$receipt") checked=$checked exempt_by_CREATES=$PATHS_EXEMPT"
+}
+# ---------------------------------------------------------------- C4 rootfs rehearsal
+c4() {
+  local rel plan lane runner receipts receipt out rc line claimed actual reason manifest plan_sha why="" vals
+  mapfile -t vals < <(decl C4_PLAN)
+  if [ ${#vals[@]} -eq 0 ]; then
+    if [ -z "$C2_RECEIPT" ] || [[ ! $C2_RECEIPT_SHA =~ ^[0-9a-f]{64}$ ]]; then
+      emit C4 SKIP "c2_receipt_unavailable"
+    else
+      emit C4 SKIP "c4_plan_not_declared"
+    fi
+    return
+  fi
+  rel=${vals[0]}
+  # Rollout compatibility pinned to ONE package: d24-r6 (generation fc0e774c, queued 2026-10-24) sealed a gate summary
+  # as C4_PLAN before C4 existed. Only that generation with that exact value keeps its full load; any other declared
+  # C4_PLAN that is not a sealed rehearsal plan fails closed.
+  if [ ${#vals[@]} -eq 1 ] && [ "$G" = fc0e774c5cfc891ad9ab860a06c235c8 ] \
+      && [ "$(printf '%s' "$rel" | sha256sum | cut -d' ' -f1)" = 7f203b23f535608d2e0d856538328d55ce87e8ede7bc1c4d4b439955121eb851 ]; then
+    [ "$C1_MANIFEST_OK" = 1 ] || { emit C4 FAIL "seal_not_verified"; return; }
+    emit C4 SKIP "c4_plan_legacy_free_text generation=$G (full load; pinned pre-C4 declaration, no rehearsal)"
+    return
+  fi
+  plan=$P/$rel
+  if [ ${#vals[@]} -gt 1 ]; then why="declared_${#vals[@]}_times"
+  elif [ -z "$rel" ]; then why=empty
+  else case "$rel" in /*|../*|*/../*|*/..|..) why=path_not_package_relative ;; esac
+  fi
+  if [ -n "$why" ]; then :
+  elif [ -L "$plan" ]; then why=symlink
+  elif [ ! -f "$plan" ]; then why=not_a_file
+  elif ! awk -v n="$rel" 'substr($0, 67) == n { f = 1 } END { exit !f }' "$P/ARTIFACT-SHA256SUMS" 2>/dev/null; then why=not_sealed
+  elif ! jq -e '.Schema == "pocketforge.kit-rootfs-rehearsal/v1"' "$plan" >/dev/null 2>&1; then why=wrong_schema
+  fi
+  if [ -n "$why" ]; then
+    emit C4 FAIL "c4_plan_invalid why=$why value=\"$(clean "$rel" | cut -c1-80)\" (a declared C4_PLAN must be the sealed package-relative path of a pocketforge.kit-rootfs-rehearsal/v1 plan: fix it in a NEW generation, or declare none for a full load)"
+    return
+  fi
+  [ "$C1_MANIFEST_OK" = 1 ] || { emit C4 FAIL "seal_not_verified"; return; }
+  [ -n "$IMAGE" ] && [ -n "$RAW" ] || { emit C4 FAIL "image_not_verified_by_C2"; return; }
+  [ -n "$C2_RECEIPT" ] && [[ $C2_RECEIPT_SHA =~ ^[0-9a-f]{64}$ ]] || { emit C4 FAIL "c2_receipt_unavailable"; return; }
+  receipts=${KP_C4_RECEIPTS_DIR:-$R/c4-receipts}
+  receipt=$receipts/$G.json
+  # Create-once: the queue re-runs preflight on --dry-run, --recheck and a requeue. A receipt that binds this exact
+  # generation, seal, plan and image is reused; anything else fails, and only a NEW generation re-runs C4.
+  if [ -e "$receipt" ] || [ -L "$receipt" ]; then
+    manifest=$(sha256sum < "$P/ARTIFACT-SHA256SUMS" | cut -d' ' -f1); plan_sha=$(sha256sum < "$plan" | cut -d' ' -f1)
+    if [ -f "$receipt" ] && [ ! -L "$receipt" ] && jq -e --arg g "$G" --arg m "$manifest" --arg p "$plan_sha" --arg r "$RAW" \
+        '.Schema == "pocketforge.kit-rootfs-rehearsal-receipt/v1" and .Generation == $g and .Outcome == "PASS"
+         and .PackageManifestSHA256 == $m and .PlanSHA256 == $p and .Image.RawSHA256 == $r' "$receipt" >/dev/null 2>&1; then
+      emit C4 PASS "rootfs_rehearsal_reused receipt=$receipt receipt_sha256=$(sha256sum < "$receipt" | cut -d' ' -f1)"
+    else
+      reason=$( { [ -L "$receipt" ] && echo symlink; } || jq -r '"outcome=\(.Outcome) reason=\(.Reason)"' "$receipt" 2>/dev/null || echo unreadable)
+      emit C4 FAIL "receipt_exists generation=$G $(clean "$reason" | cut -c1-120) receipt=$receipt (create-once; re-prepare a NEW generation)"
+    fi
+    return
+  fi
+  lane=$(sed -n 's/^Lane=//p' "$P/CAPABILITY-BUNDLE.txt" 2>/dev/null | head -1)
+  [ -n "$lane" ] || { emit C4 FAIL "lane_unreadable"; return; }
+  runner=${KP_C4_RUNNER:-$D/scripts/pf-kit-rootfs-rehearsal}
+  [ -x "$runner" ] || { emit C4 FAIL "runner_missing path=$runner"; return; }
+  if [ ! -d "$receipts" ]; then install -d -m 0700 "$receipts" 2>/dev/null || { emit C4 FAIL "receipt_dir_unavailable"; return; }; fi
+  out=$(PYTHONDONTWRITEBYTECODE=1 "$runner" --package "$P" --image "$IMAGE" --image-sha256 "$RAW" \
+    --plan "$plan" --receipt "$receipt" --generation "$G" --lane "$lane" --owner-run "$OWNER" \
+    --c2-receipt "$C2_RECEIPT" --c2-receipt-sha256 "$C2_RECEIPT_SHA" 2>&1); rc=$?
+  line=$(printf '%s\n' "$out" | grep '^C4_ROOTFS_REHEARSAL ' | tail -1)
+  reason=$(printf '%s' "$line" | sed -n 's/.* reason=\([^ ]*\).*/\1/p')
+  claimed=$(printf '%s' "$line" | sed -n 's/.* receipt_sha256=\([0-9a-f]\{64\}\).*/\1/p')
+  actual=$([ -f "$receipt" ] && sha256sum "$receipt" | cut -d' ' -f1)
+  if [ "$rc" -eq 0 ] && printf '%s' "$line" | grep -q ' result=PASS ' && [ "$claimed" = "$actual" ] && [[ $actual =~ ^[0-9a-f]{64}$ ]]; then
+    emit C4 PASS "rootfs_rehearsed receipt=$receipt receipt_sha256=$actual"
+  elif [ "$rc" -eq 1 ] && printf '%s' "$line" | grep -q ' result=REFUSED ' && [ -n "$reason" ]; then
+    emit C4 FAIL "$reason receipt=$receipt"
+  else
+    emit C4 FAIL "${reason:-runner_error} rc=$rc out=\"$(clean "$out")\""
+  fi
 }
 
 # ---------------------------------------------------------------- C2store image source published in the artifact store
@@ -570,7 +688,7 @@ c9() {
   [ "$(stat -c %s -- "$fl" 2>/dev/null || echo -1)" -ge 0 ] && [ "$(stat -c %s -- "$fl")" -le "$KP_MAX_FLOOR_BYTES" ] \
     || { emit C9 FAIL "floor_file_too_large_or_unstatable $fl limit=$KP_MAX_FLOOR_BYTES"; return; }
   floor=$(cat -- "$fl" 2>/dev/null) || { emit C9 FAIL "floor_file_unreadable $fl"; return; }
-  git -C "$D" cat-file -e "$a^{commit}" 2>/dev/null || { emit C9 FAIL "automation_sha_unreachable_in_runner sha=${a:0:12} runner=$(basename "$D")"; return; }
+  runner_has_pin "$a" || { emit C9 FAIL "automation_sha_unreachable_in_runner sha=${a:0:12} runner=$(basename "$D") $UNREACH_HINT"; return; }
   while IFS= read -r line || [ -n "$line" ]; do
     [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
     read -r sha why <<<"$line"
@@ -724,7 +842,232 @@ c13() {
   else emit C13 FAIL "$(join "${why[@]}") (render the template field and reseal a NEW generation)"; fi
 }
 
-c1; c2; c2store; c3; c7; c8; c9; c10; c11; c12; c13
+# gpu-14 2026-10-21 (tsp-mc9m.41.1030.56.11): automation#1662 made stage() require a CloudInitPolicy and every queued
+# kit then failed at stage with package_invalid (13 rows, 02:41Z). #1668 admits policy-free legacy kits except for the
+# configured schema image. C14 runs kit-policy.py, which calls the ACTIVE runner clone's own admission function, so a
+# kit the live stage would refuse fails here, before the window chain. Not overridable: the runner refuses it anyway.
+c14() {
+  local out
+  out=$("$R/kit-policy.py" check "$P" 2>&1 | tail -n1)
+  case "$out" in
+    "KIT_POLICY result=PASS"*) emit C14 PASS "$(clean "${out#KIT_POLICY result=PASS reason=}")" ;;
+    *) emit C14 FAIL "cloud_init_policy $(clean "${out#KIT_POLICY result=FAIL reason=}") (reseal a NEW generation with pf-kit-window-prepare prepare)" ;;
+  esac
+}
+
+# gpu-14 2026-10-21 (glesproof a3dcb844, BASE_BOOT_FAILED 03:51Z): the lane re-sealed by COPYING an older package's
+# stage/ (b9f5189b, itself a copy of 0e62624c's) and swapping the Generation in SEED-RECEIPT.txt. window-chain resumes
+# any stage/ whose receipt names this generation, so boot-open sent seed handle 38a4d4a7, which 0e62624c's own boot had
+# consumed at 22:00Z (inject always deletes it), and node-recover refused seed_handle_unknown after the FEL power-up.
+# C15: a stage/ that exists must be this generation's own: receipt present, Generation equal, and its SeedHandle named
+# by no other generation's boot-open record or package stage. Local-only (kit-preflight never contacts the node);
+# the node-side check before boot-open is tsp-mc9m.41.995.131 gap 2. Not overridable.
+c15() {
+  local st="$P/stage" rc_gen handle hits
+  if [ ! -e "$st" ]; then emit C15 PASS "not_staged (window-chain stages fresh)"; return; fi
+  if [ ! -f "$st/SEED-RECEIPT.txt" ]; then emit C15 FAIL "stage_dir_without_receipt (delete nothing; reseal a NEW generation and let window-chain stage it)"; return; fi
+  rc_gen=$(sed -n 's/^Generation=//p' "$st/SEED-RECEIPT.txt" | head -n1)
+  handle=$(sed -n 's/^SeedHandle=//p' "$st/SEED-RECEIPT.txt" | head -n1)
+  [ "$rc_gen" = "$G" ] || { emit C15 FAIL "stage_receipt_generation_mismatch receipt=${rc_gen:-none}"; return; }
+  [[ "$handle" =~ ^[0-9a-f]{32}$ ]] || { emit C15 FAIL "stage_receipt_handle_invalid"; return; }
+  hits=$(grep -l -- "$handle" "${PF_KIT_WINDOWS_DIR:-$HOME/.local/state/pocketforge/kit-windows}"/boot-open-*.json 2>/dev/null | grep -v -- "boot-open-$G" | sed -E 's#.*/boot-open-([0-9a-f]{8}).*#\1#' | sort -u | tr '\n' ',' | sed 's/,$//')
+  [ -z "$hits" ] || { emit C15 FAIL "seed_handle_already_used handle=${handle:0:8} by_boot_open=$hits (a copied stage; reseal a NEW generation, never copy stage/)"; return; }
+  emit C15 PASS "own_stage handle=${handle:0:8}"
+}
+
+# gpu-14 2026-10-21 (frD 5037b053, boot_open_failed RESUME_ADAPTER_INVALID 13:41Z): the lane ran prepare with
+# --automation-repo set to the shared automation checkout, so Live.Repo named a repo whose HEAD was main, not the kit's
+# AutomationSHA, and whose git common dir is not a deployed runner clone. The runner refuses that at boot-open. router
+# 5af7a999 named a .driver-pins worktree of the same shared checkout. C16: every Live.Repo the kit names must have the
+# git common dir of a clone in the RUNNING service's PF_KIT_TRUSTED_AUTOMATION_REPOS, a clean tree, and a HEAD equal
+# to that request's AutomationSHA. Not overridable: the runner refuses it anyway.
+c16() {
+  local trusted out
+  trusted=$(systemctl --user show pf-kit-window-runner.service -p Environment --value 2>/dev/null | tr ' ' '\n' | sed -n 's/^PF_KIT_TRUSTED_AUTOMATION_REPOS=//p')
+  [ -n "$trusted" ] || { emit C16 FAIL "runner_trust_unreadable (is pf-kit-window-runner.service up?)"; return; }
+  out=$(TRUSTED="$trusted" python3 - "$P" <<'PY'
+import json, os, subprocess, sys
+from pathlib import Path
+pkg = Path(sys.argv[1])
+def common(repo):
+    r = subprocess.run(["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                       capture_output=True, text=True)
+    return str(Path(r.stdout.strip()).resolve()) if r.returncode == 0 and r.stdout.strip() else None
+trusted = {c for c in (common(t) for t in os.environ["TRUSTED"].split(":") if t) if c}
+files = [pkg / "boot-open-request.template.json", pkg / "stage" / "boot-open-request.json"]
+files += sorted((pkg / "requests-sealed").glob("*.json")) if (pkg / "requests-sealed").is_dir() else []
+seen = {}
+for f in files:
+    try:
+        d = json.loads(f.read_text())
+    except (OSError, ValueError):
+        continue
+    live = d.get("Live") if isinstance(d, dict) else None
+    repo = live.get("Repo") if isinstance(live, dict) else None
+    sha = d.get("AutomationSHA") if isinstance(d, dict) else None
+    if isinstance(repo, str) and isinstance(sha, str):
+        seen[(repo, sha)] = f.name
+if not seen:
+    print("PASS no_live_repo_named"); sys.exit()
+for (repo, sha), name in sorted(seen.items()):
+    c = common(repo)
+    if c is None:
+        print(f"FAIL live_repo_unreadable repo={repo} file={name}"); sys.exit()
+    if c not in trusted:
+        print(f"FAIL live_repo_untrusted repo={repo} (not a deployed runner clone; prepare --automation-repo must name one)"); sys.exit()
+    head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    if head != sha:
+        print(f"FAIL live_repo_head_mismatch repo={repo} head={head[:8]} pin={sha[:8]}"); sys.exit()
+    if subprocess.run(["git", "-C", repo, "status", "--porcelain", "--untracked-files=all"], capture_output=True, text=True).stdout.strip():
+        print(f"FAIL live_repo_dirty repo={repo}"); sys.exit()
+print("PASS trusted_clone_at_pin repos=" + ",".join(sorted({Path(r).name + "@" + s[:8] for r, s in seen})))
+PY
+)
+  case "$out" in
+    PASS*) emit C16 PASS "$(clean "${out#PASS }")" ;;
+    *) emit C16 FAIL "$(clean "${out#FAIL }") (reseal a NEW generation with prepare --automation-repo <deployed clone at the pin>)" ;;
+  esac
+}
+
+# c16 defined above is NOT called yet (13:55Z): the runner materializes its own per-window checkout, so whether a kit's
+# Live.Repo must itself be trusted is unproven; enable after the RESUME_ADAPTER_INVALID root cause is known.
+# ---------------------------------------------------------------- C18 CloudInitPolicy kits need the #1689 resume fix
+# 2026-10-21 gpu-14 (frD 5037b053, OTA e7615840, pwrcyc 65382ab9): a FelBootRequest carrying CloudInitPolicy made
+# LiveTransport.__init__ refuse FELBOOT_BODY_INVALID, so boot-open failed RESUME_ADAPTER_INVALID in ~2 s for every pin
+# before automation#1689 (2b5131a5). The session runs at the kit's pin, so a policy kit must pin a commit with the fix.
+# Not overridable.
+c18() {
+  local a fix=2b5131a5879338a0b1ba1dd6e7eef275b3b378f6 f hit=""
+  for f in "$P/boot-open-request.json" "$P/boot-open-request.template.json" "$P/seed-kit/felboot-request.template.json" \
+           "$P/stage/seed-kit/felboot-request.json"; do
+    [ -f "$f" ] && grep -q '"CloudInitPolicy"' "$f" 2>/dev/null && hit="$hit ${f#"$P"/}"
+  done
+  [ -z "$hit" ] && { emit C18 PASS "no_cloudinit_policy"; return; }
+  a=$(jq -r '.AutomationSHA // empty' "$P/boot-open-request.json" 2>/dev/null)
+  [ -z "$a" ] && a=$(jq -r '.AutomationSHA // empty' "$P/boot-open-request.template.json" 2>/dev/null)
+  [[ $a =~ ^[0-9a-f]{40}$ ]] || { emit C18 FAIL "policy_kit_automation_sha_unknown"; return; }
+  git -C "$D" cat-file -e "$fix^{commit}" 2>/dev/null || { emit C18 FAIL "fix_commit_missing_in_runner runner=$(basename "$D")"; return; }
+  runner_has_pin "$a" || { emit C18 FAIL "policy_kit_automation_sha_unreachable_in_runner sha=${a:0:12} runner=$(basename "$D") $UNREACH_HINT"; return; }
+  if git -C "$D" merge-base --is-ancestor "$fix" "$a" 2>/dev/null; then emit C18 PASS "policy_kit automation=${a:0:12} contains_fix=2b5131a5"
+  else emit C18 FAIL "policy_kit_pin_predates_fix automation=${a:0:12} fix=2b5131a5 files=$(echo $hit | tr ' ' ',') (#1689; re-seal pinned to 2b5131a5 or later)"; fi
+}
+
+# ---------------------------------------------------------------- C19 package dry run (deployed runner's check-package)
+# gpu-14 2026-10-26 (tsp-mc9m.41.1030.56.3, automation#1840 89e7fc88): ec7f94da lost an 18 min FEL boot to a post-boot
+# fill-bundle refusal. #1840 added `pf-kit-window-prepare check-package <generation> --package-dir <pkg>`, a dry run of
+# the runner's own fill/stage rules (filled_bundle_exists, generation_mismatch, capability_identity_mismatch) that opens
+# no window and writes nothing. Run it from the DEPLOYED runner $D only, never main (no bytecode: clone stays clean). A
+# runner that predates #1840 is a SKIP, never another tree. Not overridable: the runner refuses the package anyway.
+c19() {
+  local lib out rc reason head
+  [ -n "$D" ] && { [ -d "$D/.git" ] || [ -f "$D/.git" ]; } || { emit C19 FAIL "runner_clone_unknown"; return; }
+  lib=$D/scripts/lib/pf_kit_window_prepare.py
+  head=$(git -C "$D" rev-parse HEAD 2>/dev/null | cut -c1-8); head=${head:-unknown}
+  grep -qE 'add_parser\("check-package"\)' "$lib" 2>/dev/null || { emit C19 SKIP "runner_lacks_check_package runner=$head"; return; }
+  [ "$C1_MANIFEST_OK" = 1 ] || { emit C19 FAIL "seal_not_verified"; return; }
+  out=$(PYTHONDONTWRITEBYTECODE=1 timeout -k 5 "${KP_C19_TIMEOUT:-60}" "$D/scripts/pf-kit-window-prepare" check-package "$G" \
+    --package-dir "$P" 2>&1 </dev/null); rc=$?
+  reason=$(printf '%s\n' "$out" | sed -n 's/^PF_KIT_WINDOW_PREPARE_REFUSED reason=\([A-Za-z0-9_.:-]*\).*/\1/p' | tail -1)
+  if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q "^PF_KIT_WINDOW_CHECK_PACKAGE state=pass generation=$G "; then
+    emit C19 PASS "package_dry_run_ok runner=$head"
+  elif [ "$rc" -ne 0 ] && [ -n "$reason" ]; then emit C19 FAIL "$(clean "$reason")"
+  elif [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then emit C19 FAIL "check_package_timeout limit=${KP_C19_TIMEOUT:-60}s runner=$head"
+  else emit C19 FAIL "check_package_error rc=$rc runner=$head out=\"$(clean "$out" | cut -c1-160)\""; fi
+}
+
+# ---------------------------------------------------------------- C20 sealed KitPayload descriptor matches the packaged file
+# gpu-14 2026-10-28 (rtx11 g28 990ae594): C19 check-package passed, then stage refused felboot_payload_changed 12 s into the
+# window: the sealed seed-kit/felboot-request.template.json KitPayload did not match the packaged pf-kit-payload.tar.gz
+# (374 B 6e129e6e). Mirrors the runner's stage rule (prepare: seed_template KitPayload -> stage_kit_payload(package/
+# pf-kit-payload.tar.gz)) so the lane hears it at ADD.
+# Not overridable: the runner refuses the package anyway.
+c20() {
+  local out
+  [ -f "$P/seed-kit/felboot-request.template.json" ] || { emit C20 PASS "no_seed_template"; return; }
+  out=$(python3 -I - "$P" <<'C20PY' 2>&1
+import hashlib, json, os, sys
+p = sys.argv[1]
+try:
+    d = json.load(open(os.path.join(p, "seed-kit", "felboot-request.template.json")))
+except Exception:
+    print("FAIL seed_template_unreadable"); sys.exit()
+k = d.get("KitPayload") if isinstance(d, dict) else None
+if k is None:
+    print("PASS no_kit_payload"); sys.exit()
+if not isinstance(k, dict) or not isinstance(k.get("Name"), str) or "/" in k["Name"] \
+        or type(k.get("Bytes")) is not int or not isinstance(k.get("SHA256"), str):
+    print("FAIL kit_payload_descriptor_invalid"); sys.exit()
+f = os.path.join(p, k["Name"])
+try:
+    b = open(f, "rb").read()
+except OSError:
+    print("FAIL kit_payload_missing name=%s" % k["Name"]); sys.exit()
+h = hashlib.sha256(b).hexdigest()
+if len(b) != k["Bytes"] or h != k["SHA256"]:
+    print("FAIL felboot_payload_changed sealed=%dB:%s file=%dB:%s" % (k["Bytes"], k["SHA256"][:8], len(b), h[:8]))
+else:
+    print("PASS kit_payload_matches %dB:%s" % (len(b), h[:8]))
+C20PY
+)
+  case "$out" in
+    "PASS "*) emit C20 PASS "${out#PASS }" ;;
+    "FAIL "*) emit C20 FAIL "$(clean "${out#FAIL }")" ;;
+    *) emit C20 FAIL "c20_error out=\"$(clean "$out" | cut -c1-120)\"" ;;
+  esac
+}
+
+# ---------------------------------------------------------------- C21 seq0 bootstrap can reach the network the kit boots with
+# gpu-14 2026-10-28 (rtx11 g31 d200dfd1): the seed's ExtraBootArgs carried modprobe.blacklist=xradio, so wlan0 never came up
+# and the plain seq0 network bootstrap failed ipv4_missing. The lane loaded xradio at seq3 and seq4's bootstrap passed, but
+# window-netready-watch.sh and `pf-kit-window-prepare network-ready` accept only the seq0 bootstrap (refused
+# bootstrap_not_single_pass, then bootstrap_receipt_invalid), so the open window idled out with no lane SSH.
+# Rule: when the seed blacklists the DUT Wi-Fi driver, the sequence-0 template (bootstrap-step.template.json) must load it
+# (modprobe/insmod <driver>) before its wlan0 check. module_blacklist= also blocks an explicit modprobe, so it always fails.
+# Not overridable: the queue's network handoff refuses the window anyway.
+c21() {
+  local out
+  [ -f "$P/seed-kit/felboot-request.template.json" ] || { emit C21 PASS "no_seed_template"; return; }
+  out=$(python3 -I - "$P" <<'C21PY' 2>&1
+import json, os, re, sys
+p = sys.argv[1]
+NET = {"xradio", "xradio_wlan", "xr829", "xr819"}
+try:
+    d = json.load(open(os.path.join(p, "seed-kit", "felboot-request.template.json")))
+except Exception:
+    print("FAIL seed_template_unreadable"); sys.exit()
+args = d.get("ExtraBootArgs") if isinstance(d, dict) else None
+if args is None or args == "":
+    print("PASS no_extra_boot_args"); sys.exit()
+if not isinstance(args, str):
+    print("FAIL extra_boot_args_not_string"); sys.exit()
+soft, hard = set(), set()
+for tok in args.split():
+    k, _, v = tok.partition("=")
+    mods = {m.replace("-", "_") for m in v.split(",") if m}
+    if k == "modprobe.blacklist":
+        soft |= mods & NET
+    elif k == "module_blacklist":
+        hard |= mods & NET
+# 2026-10-28T16:15Z: the seq0 bootstrap must be byte-identical to the runner's canonical
+# pf_kit_window_prepare.BOOTSTRAP (C1, window-chain.sh), and that bootstrap loads no driver. A blacklisted
+# Wi-Fi driver therefore always leaves seq0 at ipv4_missing (rtx11 g31). v1 accepted a modprobe in the
+# bootstrap, which C1 then refused (rtx11 g33). Until tsp-mc9m.41.1030.79 adds a declared driver load to
+# the canonical bootstrap, any blacklist of the DUT Wi-Fi driver fails.
+both = soft | hard
+if both:
+    kind = "module_blacklist" if hard else "modprobe.blacklist"
+    print("FAIL network_driver_blacklisted drivers=%s via=%s (the canonical seq0 bootstrap cannot load it; drop it from ExtraBootArgs and reseal a NEW generation, or hand back the reason the experiment needs it)" % (",".join(sorted(both)), kind)); sys.exit()
+print("PASS no_network_driver_blacklisted")
+C21PY
+)
+  case "$out" in
+    "PASS "*) emit C21 PASS "${out#PASS }" ;;
+    "FAIL "*) emit C21 FAIL "$(clean "${out#FAIL }")" ;;
+    *) emit C21 FAIL "c21_error out=\"$(clean "$out" | cut -c1-120)\"" ;;
+  esac
+}
+
+c1; c2; c2store; c4; c3; c7; c8; c9; c10; c11; c12; c13; c14; c15; c18; c19; c20; c21
 [ -n "$CHAIN_PATHS_OK" ] && echo "KIT_PREFLIGHT chain_paths_ok=$CHAIN_PATHS_OK"
 if [ ${#FAILED[@]} -eq 0 ]; then
   echo "KIT_PREFLIGHT result=PASS failed=- gen=$G image=${RAW:0:8} overrides=$(join "${OVERRIDES[@]}" | sed 's/^$/-/') paths_exempt=$PATHS_EXEMPT"; exit 0

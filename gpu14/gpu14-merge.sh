@@ -14,6 +14,26 @@ repo=${ref%#*}; n=${ref##*#}
 [[ $repo =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ && $n =~ ^[0-9]+$ ]] || { echo "GPU14_MERGE_REFUSED reason=bad_ref ref=$ref"; exit 2; }
 files=$(gh pr view "$n" -R "$repo" --json files --jq '.files[].path') || { echo "GPU14_MERGE_REFUSED reason=files_unreadable ref=$ref"; exit 2; }
 vend=$(printf '%s\n' "$files" | grep -E '(^|/)vendor/' || true)
+# gpu-14 2026-10-18 (runtime#157): a new workspace crate changes Cargo.lock, so cargo-vendor rewrites only the
+# lock stamp vendor/.pocketforge-vendor-lock. That is not a vendored-code edit. Accept it without --vendor-ok only when,
+# at the PR head: the stamp is the ONLY vendor/ file; its cargo_lock_sha256 equals sha256(Cargo.lock beside vendor/);
+# vendored_packages is unchanged from base; and the Cargo.lock diff adds no package with a source = line.
+if [ -z "$vok" ] && [ -n "$vend" ] && [ "$(printf '%s\n' "$vend" | grep -c .)" = 1 ] && [[ $vend =~ ^(.*/)?vendor/\.pocketforge-vendor-lock$ ]]; then
+  dir=${BASH_REMATCH[1]}
+  meta=$(gh api "repos/$repo/pulls/$n" --jq '.head.sha+" "+.base.sha') || meta=
+  head=${meta% *}; base=${meta#* }
+  raw() { gh api -H 'Accept: application/vnd.github.raw' "repos/$repo/contents/$1?ref=$2" 2>/dev/null; }
+  stamp_h=$(raw "${vend}" "$head"); stamp_b=$(raw "${vend}" "$base")
+  lock_sha=$(raw "${dir}Cargo.lock" "$head" | sha256sum | cut -d' ' -f1)
+  want=$(printf '%s\n' "$stamp_h" | sed -n 's/^cargo_lock_sha256=//p')
+  pk_h=$(printf '%s\n' "$stamp_h" | sed -n 's/^vendored_packages=//p'); pk_b=$(printf '%s\n' "$stamp_b" | sed -n 's/^vendored_packages=//p')
+  added_src=$(gh api "repos/$repo/pulls/$n/files" --paginate --jq ".[]|select(.filename==\"${dir}Cargo.lock\")|.patch" | grep -cE '^\+source = ' || true)
+  if [[ $head =~ ^[0-9a-f]{40}$ && -n $want && $want = "$lock_sha" && -n $pk_h && $pk_h = "$pk_b" && $added_src = 0 ]]; then
+    vok="$repo@$head lock-stamp only (auto-verified): cargo_lock_sha256=${want:0:12} matches Cargo.lock, vendored_packages=$pk_h unchanged, no registry/git package added"
+  else
+    echo "GPU14_MERGE lockstamp_check=FAIL want=${want:0:12} lock=${lock_sha:0:12} pkgs=$pk_b->$pk_h added_src=$added_src"
+  fi
+fi
 if [ -n "$vend" ]; then
   cnt=$(printf '%s\n' "$vend" | grep -c .)
   if [ -z "$vok" ]; then

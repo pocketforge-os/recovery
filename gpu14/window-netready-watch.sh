@@ -24,9 +24,21 @@ while :; do
   [ $(( $(date +%s) - t0 )) -ge "$limit" ] && { echo "$(ts) NETREADY_WATCH_STOP reason=timeout"; exit 4; }
   sleep 2
 done
+# 2026-10-25 gpu-14 (window 9733017f): the runner commits the receipt to receipts/ BEFORE delivering it to the owner run
+# (pf-task-send.sh), and network-ready RESTARTS the runner service. Restarting mid-delivery killed the send; the runner
+# then failed the window with receipt_delivery_failed and network-ready refused window_state_invalid. Wait for the
+# delivery record (delivery/<receipt>.delivered) before touching the service. rc 3 window closed/failed first, rc 4 timeout.
+t1=$(date +%s); dlimit=${NETREADY_DELIVERY_LIMIT:-300}
+while ! ls "$W"/delivery/receipt-000000-*.json.delivered >/dev/null 2>&1; do
+  st=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('State',''))" "$W/runner.json" 2>/dev/null)
+  case "$st" in closed|failed) echo "$(ts) NETREADY_WATCH_STOP reason=window_${st}_before_seq0_delivery"; exit 3;; esac
+  [ $(( $(date +%s) - t1 )) -ge "$dlimit" ] && { echo "$(ts) NETREADY_WATCH_STOP reason=seq0_delivery_timeout waited=${dlimit}s"; exit 4; }
+  sleep 2
+done
+echo "$(ts) NETREADY_WATCH seq0 delivered waited=$(( $(date +%s) - t1 ))s"
 outcome=$(python3 -c "import json,sys,glob;print(json.load(open(glob.glob(sys.argv[1])[0])).get('Outcome',''))" "$W/receipts/receipt-000000-*.json" 2>/dev/null)
 # The step stdout carries CRLF line ends (2026-10-13 window-2: ...known_hosts_fields=3^M), so strip CR first.
-pass=$(tr -d '\r' < "$out" | grep -E '^PF_KIT_NETWORK_BOOTSTRAP state=PASS host=192\.168\.86\.[0-9]{1,3} user=gamer known_hosts_fields=3$')
+pass=$(tr -d '\r' < "$out" | grep -E '^PF_KIT_NETWORK_BOOTSTRAP state=PASS host=192\.168\.86\.[0-9]{1,3} user=gamer known_hosts_fields=3( boot_id=[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?$')  # 2026-10-18 boot_id field (ce76e9c9)
 fail=$(tr -d '\r' < "$out" | grep -E '^PF_KIT_NETWORK_BOOTSTRAP state=FAIL' | head -1)
 echo "$(ts) NETREADY_WATCH seq0 outcome=$outcome pass_lines=$(printf '%s' "$pass" | grep -c . ) fail='${fail:0:120}'"
 if [ "$outcome" != pass ] || [ -n "$fail" ] || [ "$(printf '%s\n' "$pass" | grep -c .)" -ne 1 ]; then
@@ -39,7 +51,12 @@ echo "$(ts) NETREADY_WATCH host=$host"
 # saved output instead of running it twice.
 if [ -n "${NETREADY_REUSE_OUTPUT:-}" ]; then
   nr=$(cat "$NETREADY_REUSE_OUTPUT"); nrc=0; echo "$(ts) NETREADY_WATCH reuse_output=$NETREADY_REUSE_OUTPUT (not re-run)"
-elif C=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['Checkout'])" "$W/runner.json" 2>/dev/null) && [ -d "$C" ] \
+# 2026-10-25 gpu-14 (window fe39d8ec): network-ready must run from the DEPLOYED runner tree, like stage and fill-bundle
+# (window-chain.sh calls both through pf-automation-tool). It used the session Checkout (runner.json, the package's
+# AutomationSHA); a checkout older than automation 89eb2d6c expects the pre-seal 0700 stage/, refused the deployed
+# runner's sealed 0500 stage/ with stage_commit_invalid after the boot was spent, and the unrefreshed DUT key then failed
+# every later step with credential_generation_mismatch. The env file it writes belongs to the deployed runner anyway.
+elif C=$(systemctl --user show pf-kit-window-runner.service -p Environment --value | tr ' ' '\n' | sed -n 's/^PF_KIT_AUTOMATION_REPO=//p') && [ -d "$C" ] \
      && env PATH=/usr/bin:/bin /usr/bin/python3 "$C/scripts/pf-kit-window-prepare" network-ready --help 2>/dev/null | grep -q -- '--source-address'; then
   # 2026-10-15 (route automation#1482, runner d1f5eb2e): network-ready requires the caller's route identity, and the
   # packages' netready.sh (template from before #1482) omits it: window A 19ee901c refused at 06:12:30Z. Declare the
@@ -50,6 +67,17 @@ elif C=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['Checkou
   [[ $src =~ ^192\.168\.86\.[0-9]{1,3}$ && -n $dev ]] || { echo "$(ts) NETREADY_WATCH_REFUSED reason=route_identity_invalid dev=$dev src=$src"; exit 5; }
   [ -z "$(git -C "$C" status --porcelain --untracked-files=all)" ] || { echo "$(ts) NETREADY_WATCH_REFUSED reason=checkout_dirty"; exit 5; }
   echo "$(ts) NETREADY_WATCH route interface=$dev source=$src checkout=$(git -C "$C" rev-parse --short=12 HEAD)"
+  # 2026-10-26 gpu-14 (window 294e06d8, runner pa-fbd45e17): the runner took 90 s to stop after seq-0 delivery
+  # (SIGKILL, 3.9G peak). network-ready's 30 s restart timed out, so the handoff failed and the boot was spent
+  # (bead tsp-mc9m.41.1030.56.39). Until that fix deploys: log the runner's processes for the bead, then stop the unit
+  # here with a 150 s budget so network-ready's restart is only a start. Same stop it already does, with room to finish.
+  cg=$(systemctl --user show pf-kit-window-runner.service -p ControlGroup --value)
+  for p in $(cat "/sys/fs/cgroup$cg/cgroup.procs" 2>/dev/null); do
+    echo "$(ts) NETREADY_WATCH runner_proc pid=$p $(ps -o rss=,pcpu=,etimes=,wchan:20=,args= -p "$p" 2>/dev/null | cut -c1-160 | xargs) big_fds=$(/usr/bin/find /proc/$p/fd -maxdepth 1 -type l -printf '%l\n' 2>/dev/null | grep -E '\.(img|xz|zst)$|Image' | head -3 | xargs)"
+  done
+  t2=$(date +%s); timeout 150 systemctl --user stop pf-kit-window-runner.service; prc=$?
+  echo "$(ts) NETREADY_WATCH runner_prestop rc=$prc took=$(( $(date +%s) - t2 ))s"
+  [ "$prc" -eq 0 ] || { echo "$(ts) NETREADY_WATCH_REFUSED reason=runner_prestop_failed rc=$prc"; exit 5; }
   nr=$(env PATH=/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 "$C/scripts/pf-kit-window-prepare" network-ready "$gen" \
        --package-dir "$pkg" --host-from-receipt "$pkg/series/revision-000.json" --interface "$dev" --source-address "$src" 2>&1); nrc=$?
 elif [ -f "$pkg/netready.sh" ]; then

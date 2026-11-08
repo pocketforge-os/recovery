@@ -18,7 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "install-fleet-board.sh")
 UNIT_SRC = os.path.join(os.path.dirname(HERE), "systemd")   # gpu14/systemd: the one tracked copy of each unit
 REPO = os.path.dirname(os.path.dirname(HERE))
-SCRIPTS = ("collect.py", "render.py", "refresh.sh", "velocity.py", "hardware-rows.json")
+SCRIPTS = ("collect.py", "render.py", "refresh.sh", "velocity.py", "hardware-rows.json", "shared-refresh-allow.json")
 UNITS = ("pf-fleet-board.service", "pf-fleet-board.timer")
 # Live-only data next to the scripts: --apply must leave every one byte-identical and add nothing beside them.
 DATA = ("parked.tsv", "waits.tsv", "data.json", "needs/n1.json", "window-done/w1", "lanes-added.log",

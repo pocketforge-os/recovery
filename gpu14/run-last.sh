@@ -3,9 +3,13 @@
 # {"limit":1} alone shows result #1; page with "offset": total-1.
 # usage: run-last.sh <run-id> [tail_chars=4000]
 set -uo pipefail
-export PF_TASK_HOST_CONFIG=/home/matt/.config/pocketforge/pf-task-host.json
-P=(timeout 200 /home/matt/.pf-task-v2/bin/pf-task --home /home/matt/.pf-task-v2 --role coordinator run.result)
+# 2026-10-20: resolve the run's own home (v2/v3/v4) the same way lane-drive.sh does; the v2-only path read
+# KeyError 'total' for every v3/v4 run (glesproof pft-29c0a72b).
+R=/home/matt/recovery/gpu14
 run=${1:?run id}; n=${2:-4000}
+resolved_home=$("$R/pf-task-run-home" resolve "$run" --format shell) || { echo "RUN_LAST_REFUSED reason=run_home_unresolved run=$run"; exit 2; }
+eval "$resolved_home"
+P=(timeout 200 "$PFT" --home "$H" --role coordinator run.result)
 total=$("${P[@]}" "{\"run_id\":\"$run\",\"limit\":1}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["total"])') || exit 2
 [ "$total" -ge 1 ] 2>/dev/null || { echo "RUN_LAST none total=$total"; exit 3; }
 "${P[@]}" "{\"run_id\":\"$run\",\"limit\":1,\"offset\":$((total-1))}" | python3 -c '

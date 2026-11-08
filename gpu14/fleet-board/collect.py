@@ -1,47 +1,64 @@
 #!/usr/bin/env python3
-"""collect.py -- gather live fleet state for gpu-14 into data.json (read-only).
+"""collect.py -- gather live fleet state for gpu-16 into data.json (read-only).
 
 Everything comes from live sources on every run; nothing is remembered between
-runs except cache/run-state.json (pf-task run.status answers, so a `released`
-run is never queried again and lanes outside the per-run pf-task time budget
-still show their last known run state with its age).
+runs except the hardware-row comment/kit caches under cache/.
+2026-11-02 (tsp-mc9m.60.29.84.14): lanes are gpu-16's managed runs (runs/active.tsv),
+the device section is BENCH + pf-kit-window-runner, owner asks come from the owner
+intake. The gpu-14 drive-log lanes and the window queue are retired and not read.
 
 Sources (all read-only):
   A. beads     `bd list --all --json --flat -n 0` (one call, every status) and
                `bd ready --json -n 0`; `bd comments <id> --json` only for stale
                candidates (bounded, see COMMENTS_MAX).
-  B. lanes     <G>/<lane>-drive.log modified in the last LANE_LOG_WINDOW_H hours,
-               `ps` for live lane-drive.sh drivers, <G>/admission-*.json for
-               run->bead/model, and pf-task run.status (single-run primary-key
-               lookups, sequential, each under PFTASK_TIMEOUT_S, total budget
-               PFTASK_BUDGET_S). Never the pf-task journal/DB.
-  C. PRs       `gh pr view` for PRs named in lane status lines (cached per run).
-  D. device    the live window queue (fleet-board/window-queue.tsv, .done.tsv,
-               .failed.tsv, .active, .pause, window-done/, /proc/locks for its run
-               lock), the legacy <G>/queue.tsv, queue.done, device-queue.txt, `ps`
-               for the queue runner and a running direct-boot.sh kit.
-  E. owner     /home/matt/gpu14-owner-questions.md "## Needs you" section.
+  B. lanes     <G16>/runs/active.tsv (NAME, run_id, pf-task home; '#' rows released),
+               pf-task run.status per run on its own home (watch-runs.py pft(): read-only,
+               sequential) and the newest G16_<CLUSTER>_STATUS line in that run's
+               receipts (<G16>/runs/receipts-<NAME>.jsonl, appended by watch-runs.py).
+               A `blocked` run whose blocker is kept usage-limit text from a quota episode
+               it has since completed a turn after is stale quota (.84.11): idle/working.
+  C. PRs       `gh pr view` for PRs named in lane status lines.
+  D. device    BENCH's newest status line (+ the newest runner=/dut=/place= it reported),
+               `systemctl --user show pf-kit-window-runner.service`, the kit windows
+               (~/.local/state/pocketforge/kit-windows), <G16>/runs/relay-sent.json for the
+               BENCH queue, and typed results of the last TYPED_RESULTS_WINDOW_H hours: the kit
+               windows' own close records (terminal.json, a failed boot-open, a failed runner:
+               collect_windows) and the files under TYPED_RESULTS_ROOT (BENCH-RESULT*.json v1,
+               lane-written *BENCH-RESULT*.txt, DEPLOY-RECEIPT*.txt).
+               2026-11-08 (tsp-hqm1p.181): a result source that yields no row while kit windows closed
+               is a WARN (results.warns), never a quiet "no typed result".
+               2026-11-05 (tsp-hqm1p.100): the same kit windows give each hardware row its device evidence
+               (collect_hw_windows / window_links): window_at, window_result ok|fail, window_generation,
+               window_bead, window_via bead|named|cluster, window_source, window_ok_n/window_fail_n, windows[],
+               and an open window as a kit. hardware.kits_scanned counts the requests read. Display only: the
+               row state and evidence_at stay the latest HW_ROW comment.
+  E. owner     `pf-owner-intake.sh list --id <id>` for each OWNER_INTAKE_IDS id; only
+               tickets that are not resolved are owner asks.
+  F. checkouts ~/.local/state/pocketforge/shared-refresh.json (pf-shared-refresh status) and
+               shared-refresh-allow.json beside this file.
 
 data.json schema (top level):
   generated_at (ISO UTC), generated_epoch, host, runtime_s
   thresholds        {name: value} the constants below, for the page footer
   errors            [{source, error}] every source that could not be read
   summary           {needs, lanes_total, lanes_running, lanes_waiting, lanes_needs,
-                     lanes_unknown, dispatchable, newly_unblocked, stale, owner_asks,
-                     device:{running, pending, halted, runner_alive, kit_running, wq_depth,
-                     wq_held, wq_active, wq_active_phase, wq_paused, wq_running}}
+                     lanes_unknown, lanes_stale_quota, dispatchable, newly_unblocked, stale,
+                     owner_asks, device:{running (open window "<purpose> <gen8>"), pending (unanswered
+                     BENCH queue rows), halted (runner unit not active), runner_alive, kit_running,
+                     windows_open, bench_state, bench_verdict, queue_total, results_24h}}
   needs             [{rank, kind, id, lane, bead, run, pr, reason, since, age_s, next}]
                     kind in handback|merge_ready|boot_ready|blocked|stale|undriven|
-                    device|dispatchable ; sorted by rank
-  lanes             [{lane, token, run, run_state, run_checked_at, run_fresh, bead,
-                     bead_title, model, provider, runtime, driver_alive, driver_pids,
-                     last_status:{n, state, reason, kv, ts, raw}, last_event_at,
-                     last_turn_end, ci_wait:{pr, head, result, ts}, pr, pr_head,
-                     reconciler_alive, controller_alive, runtime_alive,
-                     native_activity_age_s, worktree, blocker_error,
-                     cls (needs|waiting|running|released|unknown|evidence), kind, cls_reason,
-                     next, log, log_mtime, source (log|admission), evidence:{who, bead}|null}]
-                    (cls evidence: a parked run kept as evidence_for=<who>[:<bead>], see park_condition)
+                    device|host|dispatchable ; sorted by rank
+  lanes             [{lane, token, run, home, run_state (pf-task), state (working|idle|blocked|...|
+                     unknown), stale_quota, run_checked_at, run_fresh, run_error, bead, bead_title,
+                     model, provider, runtime, driver_alive (controller and reconciler alive),
+                     last_status:{cluster, verdict, state, reason, kv, detail, raw, receipt, ts,
+                     age_src (turn end|receipt log), newest}, status_age_s, last_turn_end,
+                     last_turn_reason, pr, reconciler_alive, controller_alive, runtime_alive,
+                     native_activity_age_s, messages_pending, messages_total, receipts_total,
+                     receipts_unacked, worktree, blocker_error, cls (needs|waiting|running|unknown),
+                     kind, cls_reason, next, source, session_id}]
+  released_runs     [{lane, run, bead}]   '#' rows of active.tsv and released runs
   prs               {"owner/repo#N": {state, merged_at, head, review, draft, title,
                      url, checks:{total, success, pending, failed, failed_names},
                      ci_green, merge_ready, fetched_at, error}}
@@ -50,24 +67,30 @@ data.json schema (top level):
                     bead = {id, title, status, priority, type, tier, parent,
                             parent_title, updated_at, created_at, blockers:[{id,
                             status, closed_at, title}], lane}
-  device            {runner_alive, kit_running, kit_proc, halted, halt_line,
-                     running:{name, started_at, elapsed_s, receipt}|null,
-                     next:[{name, type, path, sha, args, position}], pending_count,
-                     held_count, done_count, results:[{ts, name, verdict, cls,
-                     detail}], events:[{ts, kind, text}], last_line, log_mtime,
-                     window_queue:{running, running_via, paused, pause_line, pause_at, depth,
-                     held_count, withdrawn_count, active:{gen, lane, owner, label, phase,
-                     since, pkg}|null, pending:[row+position], held:[row+hold, held_at,
-                     reason], done_count, failed_count, recent:[{ts, gen, lane, label,
-                     outcome, src}]}}
-                    (lanes[].window_queue = {gen, state, text, position} for a BOOT_READY lane)
+  device            {bench:{lane, run, home, bead, run_state, state, cls, cls_reason, last_status,
+                     status_age_s, messages_pending, messages_total, native_activity_age_s,
+                     stale_quota, blocker_error}|null,
+                     runner:{unit, active, sub, pid, since, deployed, error},
+                     reported:{runner|dut|place: {value, receipt, receipts_back}} (BENCH status lines),
+                     boundary:{dut, place, at, file}|null (newest typed result that carries one),
+                     windows:[{gen, requested_at, state, outcome, open, lane, purpose, opened_at,
+                     deadline, last_activity}] (WINDOWS_SHOW newest), windows_open, windows_total,
+                     queue:[{cluster, lane, from, request, request_file, request_sha256, relayed_at,
+                     age_s, answered, answers_after, answer:{to, file, at, state, reason,
+                     typed_cause}|null}], sent_error,
+                     results:{window_h, root, depth, total, error, windows_root, windows_closed,
+                     by_kind:{kind: n}, warns:[{source kit-window|files, windows_closed, text}],
+                     groups:[{kind, state, reason, typed_cause, count, latest_at, lanes, sev}],
+                     items:[{kind kit-window|bench-result|bench-result-txt|deploy-result|deploy-receipt,
+                     file, path, at, state, reason, typed_cause, lane, lane_hint, boundary,
+                     (kit-window) gen, lane_reason, purpose}]}}
   stale             [{id, title, status, assignee, tier, parent, updated_at,
                      last_comment_at, comment_count, age_s}]
   long_idle         {count, ids:[...]}   in_progress in scope, untouched > STALE_LOOKBACK_H
-  owner_asks        {count, items:[{num, title}], error}
+  owner_asks        {count, items:[{ticket, status, round, bead, id, title}], error, source, ids,
+                     listed, resolved}   (open = intake status other than resolved)
   owned             [{id, title, status, assignee, tier, parent, updated_at, age_s, priority}] beads with no lane
                     assigned to another coordinator (COORD_OWNERS); never needs or stale rows
-  evidence          [{lane, run, bead, who, keeper_bead, reason, since, age_s}] parked runs kept as evidence
   beads_index       {id: {title, status, type, priority}} for every id referenced
   hardware          {rows:[hwrow], tally:{state: n}, flags:{unowned, evidence_old, anchor_closed, no_anchor},
                      source, comments_fetched, error}   one row per hardware block (hardware-rows.json)
@@ -83,6 +106,8 @@ data.json schema (top level):
                      counts:[n]}], other:{areas, total, p0, p1, counts}, areas_total, batches:[{batch, total,
                      open, in_progress, blocked, closed, top:[{id, title, status, priority}]}]}
                     every bead with status open (all scopes), age from created_at, area = id to two segments
+  shared_refresh    {status_path, generated_at, complete, error, checkouts:[{path, branch, state, ahead, behind,
+                     first_skipped_at, last_ok_at, checked_at, skipped_s, alarm, allowlisted}]}
 """
 import struct
 import collections
@@ -109,14 +134,6 @@ PARK_MAX_H = 12
 # keeps today's behavior.
 COORD_OWNERS = ("proc-coord",)
 PARKED = {}
-RUN_BOUNDS = {}
-try:
-    for _l in open(f"{G}/run-bounds.tsv"):
-        _f = _l.rstrip("\n").split("\t")
-        if len(_f) >= 2 and _f[1].isdigit():
-            RUN_BOUNDS[_f[0]] = int(_f[1])
-except OSError:
-    pass
 try:
     with open(os.path.join(G, "fleet-board", "parked.tsv")) as _f:
         for _l in _f:
@@ -127,11 +144,9 @@ except FileNotFoundError:
     pass
 # 2026-10-11: a dispatchable or stale bead that is not gpu-14's to dispatch (another coordinator's epic) or that
 # waits on a named dependency nagged every tick. waits.tsv (bead_id<TAB>since_iso<TAB>reason) records why it
-# waits; such a bead drops out of NEEDS for WAIT_MAX_H, then comes back so a stale wait cannot hide work.
+# waits; untyped rows drop out of NEEDS for WAIT_MAX_H, then come back so stale
+# bookkeeping cannot hide work. Typed rows are governed by their condition.
 WAIT_MAX_H = 24
-# 2026-10-13 (b8p #1427): class-a-shard sat queued 90 min while pf-runner-pool looped one slot on
-# guest_preflight_failed; the lane read "CI running" every tick. A CI_WAIT still pending past this is a pool stall.
-CI_STALL_MIN = 60
 WAITS = {}
 try:
     with open(os.path.join(G, "fleet-board", "waits.tsv")) as _f:
@@ -144,7 +159,8 @@ except FileNotFoundError:
 
 
 # 2026-10-12: an owner-paused epic (tsp-ihne1.*, input-coord) re-flagged one bead per day. A waits.tsv id ending in
-# ".*" covers every descendant. Same 24 h expiry, so one row is refreshed daily.
+# ".*" covers every descendant. Typed rows share the parked.tsv condition
+# grammar; only legacy untyped rows retain the 24 h expiry.
 def wait_for(bid):
     # The freshest matching row wins (an expired exact row must not mask a fresh epic-wide one).
     cands = [v for k, v in WAITS.items() if k == bid or (k.endswith(".*") and bid.startswith(k[:-1]))]
@@ -153,10 +169,9 @@ def wait_for(bid):
 
 MC = "/home/matt/mission-control"
 BOARD = os.environ.get("FB_BOARD_DIR") or "/home/matt/recovery/gpu14/fleet-board"
+PRESERVED_RUNS_FILE = os.environ.get("FB_PRESERVED_RUNS_FILE") or os.path.join(BOARD, "preserved-runs.json")
+COORD_NEEDS_FILE = os.environ.get("FB_COORD_NEEDS_FILE") or os.path.join(BOARD, "coord-needs.json")
 OUT = os.path.join(BOARD, "data.json")
-CACHE = os.path.join(BOARD, "cache", "run-state.json")
-OWNER_ASKS = os.environ.get("FB_OWNER_ASKS") or "/home/matt/gpu14-owner-questions.md"
-RUN_HOME_RESOLVER = "/home/matt/recovery/gpu14/pf-task-run-home"
 
 # Campaign roots: a bead is in scope when its id equals a root or starts with "<root>.".
 CAMPAIGN_ROOTS = [
@@ -169,23 +184,11 @@ CAMPAIGN_ROOTS = [
     "tsp-wc8xc", "tsp-ds77e", "tsp-jfwnq", "tsp-z8vav",
 ]
 
-LANE_LOG_WINDOW_H = int(os.environ.get("FB_LANE_LOG_WINDOW_H", 72))  # lane logs older than this are not lanes any more
-ADMISSION_WINDOW_H = 72         # admission files this recent count as lanes even with no log
-PFTASK_TIMEOUT_S = 60           # per run.status call
-PFTASK_BUDGET_S = int(os.environ.get("FB_PFTASK_BUDGET_S", 150))  # total wall time for run.status calls per refresh
-                                # (FB_PFTASK_BUDGET_S=400 once warms cache/run-state.json for every lane)
-BUSY_IDLE_ALARM_MIN = 45        # busy run with no native activity for this long -> stale
-BUSY_NO_SIGNAL_ALARM_MIN = 75   # busy run with no activity signal at all, started this long ago -> stale
-HANDBACK_WITH_DRIVER_GRACE_MIN = 10  # HANDBACK while a driver is still alive: alarm after this
-KIT_STUCK_H = 3                 # device step running this long without a result -> stale
 STALE_BEAD_H = 6                # in_progress, no lane, no update/comment for this long -> stale
 STALE_LOOKBACK_H = 168          # older untouched in_progress beads are "long idle", not alarms
 STALE_INDIVIDUAL_H = 24         # stale beads idle longer than this are one aggregated needs item, not one each
 RECENT_DAYS = 14                # dispatchable beads touched within this are "recent"; the rest is backlog
 NEWLY_UNBLOCKED_H = 72          # a blocker closed within this window makes a ready bead "newly unblocked"
-RESULTS_SHOW = 10               # device results listed
-RESULTS_WINDOW_H = 24           # ... within this window (falls back to the last RESULTS_SHOW)
-NEXT_SHOW = 5                   # pending device steps listed
 PARALLEL_SHOW = 40              # dispatchable beads listed in full
 CHAINS_SHOW = 30
 GH_TIMEOUT_S = 40
@@ -194,6 +197,8 @@ BD_TIMEOUT_S = 180
 COMMENTS_PARALLEL = 4
 COMMENTS_MAX = 150
 COMMENTS_TIMEOUT_S = 30
+RULING_COMMENTS_MAX = 20        # newest comments retained in memory for board waiting/ruling attribution
+RULING_COMMENT_BYTES = 4096     # per-comment bound; no comment bodies are emitted into data.json
 # 2026-10-20 (gpu-14): hardware & driver rows and the open backlog. Rows live in hardware-rows.json beside this file;
 # their live state is the latest HW_ROW comment on an anchor bead (README "Hardware rows"). Anchor comments are fetched
 # only when the bead's comment_count moved since cache/hw-comments.json (bd comments per id is ~0.3 s; the bulk
@@ -211,20 +216,31 @@ HW_KITS_BUDGET_S = 5            # wall time for reading queued window-queue kit 
 HW_KIT_FILES_MAX = 64           # files read per kit package (OPERATOR.md, PREFLIGHT, requests-sealed/*.json, seed-kit/*)
 HW_KIT_READ_MAX = 1 << 20       # bytes read per kit file
 HW_REFS_MAX = 400               # kit paths / generations remembered per anchor from its own comments
+# 2026-11-05 (tsp-hqm1p.100): device evidence per row is derived from the kit-window runner's own results (the window
+# queue is retired, so queued kits are always empty). Display only: HW_ROW comments stay the only authority for a row's
+# state, and a derived window result never changes state, state_source, evidence_at or the HW_ROW fields.
+HW_WINDOWS_LOOKBACK_H = 168     # kit windows (boot-open requests) read for row evidence
+HW_WINDOW_INFLIGHT_H = 3        # a request with no terminal.json older than this is stale: neither a result nor a kit
+HW_WINDOW_OK_REASONS = ("lane_done", "success")   # terminal State=closed with one of these = ok (velocity.py's rule)
+HW_WINDOWS_ROW_SHOW = 3         # recent windows listed per row
+HW_MENTION_TEXT_MAX = 8000      # chars of a bead's description scanned for the bead ids it names
 BACKLOG_AREAS_SHOW = 15         # areas listed in the open-backlog table; the rest is one "other" row
 BACKLOG_BUCKETS = (("<1 d", 1), ("1–3 d", 3), ("3–7 d", 7), ("7–14 d", 14), (">14 d", None))
 
 NEEDS_STATES = {"HANDBACK", "BOOT_READY", "BLOCKED", "IDLE", "QUESTION", "MERGE_READY",
                 "DESIGN_READY", "PARTIAL", "DIAG_ONLY"}
-WAIT_STATES = {"CI_WAIT", "WAITING", "CONTINUE"}
 NON_DISPATCH_TYPES = {"epic", "gate", "molecule", "convoy"}
 
-KIND_RANK = {"merge_ready": 0, "handback": 1, "boot_ready": 2, "budget": 3, "device": 3, "blocked": 4,
+KIND_RANK = {"merge_ready": 0, "handback": 1, "boot_ready": 2, "budget": 3, "device": 3, "host": 3, "blocked": 4,
              "stale": 5, "undriven": 6, "dispatchable": 7}
 
 NOW = dt.datetime.now(dt.timezone.utc)
 T0 = time.time()
 ERRORS = []
+
+
+class SourceReadError(RuntimeError):
+    """An authoritative input could not be read completely and truthfully."""
 
 
 def err(source, e):
@@ -296,23 +312,126 @@ def run_cmd(cmd, timeout, cwd=None, env=None):
         return 127, "", str(ex)
 
 
+def load_preserved_runs():
+    try:
+        with open(PRESERVED_RUNS_FILE, errors="replace") as f:
+            rows = json.load(f)
+        if not isinstance(rows, list):
+            raise ValueError("top level must be a list")
+        return rows
+    except Exception as ex:
+        err("preserved runs", ex)
+        raise SourceReadError(f"preserved runs: {ex}") from ex
+
+
+def load_coord_needs():
+    """Load keyed producer refusals/idles; malformed state is a visible source error."""
+    try:
+        with open(COORD_NEEDS_FILE, errors="replace") as f:
+            rows = json.load(f)
+    except FileNotFoundError:
+        return []
+    except Exception as ex:
+        err("coord needs", ex)
+        raise SourceReadError(f"coord needs: {ex}") from ex
+    if not isinstance(rows, list):
+        err("coord needs", "top level must be a list")
+        raise SourceReadError("coord needs: top level must be a list")
+    out = []
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("id") or not row.get("reason"):
+            err("coord needs", "row missing id/reason")
+            raise SourceReadError("coord needs: row missing id/reason")
+        item = dict(row)
+        item["age_s"] = age_s(parse_ts(item.get("since")))
+        item.setdefault("kind", "refusal")
+        item.setdefault("next", "gpu-14: inspect typed coordination need")
+        out.append(item)
+    return out
+
+
 def in_scope(bid):
     return any(bid == r or bid.startswith(r + ".") for r in CAMPAIGN_ROOTS)
 
 
 # -------------------------------------------------------------------- beads --
+CLUSTER_ROWS_RE = re.compile(r"^## Rows[ \t]*\n(.*?)(?=^## |\Z)", re.M | re.S)
+CLUSTER_ROW_ID_RE = re.compile(r"^- (tsp-[a-z0-9]+(?:\.[0-9]+)*)\b", re.M)
+
+
+def cluster_rows(desc):
+    """2026-11-02: a gpu-16 cluster bead lists the hardware-row beads its lane drives under '## Rows' ('- <id> ...')."""
+    m = CLUSTER_ROWS_RE.search(desc or "") if "## Rows" in (desc or "") else None
+    return CLUSTER_ROW_ID_RE.findall(m.group(1)) if m else []
+
+
+CLUSTER_SHORT_RE = re.compile(r"(?:^|;)[ \t]*\.([0-9]+)\b", re.M)
+
+
+def cluster_row_mentions(desc):
+    """Every row bead a cluster bead's '## Rows' section lists, shorthand included: a line '- <full id> text; .N text'
+    lists <full id> and, after a ';' or at the start of a continuation line, the sibling '<parent of full id>.N'.
+    A '.N' inside parentheses or after a colon is a cross-reference, not a listed row. Display evidence only: the lane
+    'driving' rule keeps using cluster_rows() (full ids)."""
+    m = CLUSTER_ROWS_RE.search(desc or "") if "## Rows" in (desc or "") else None
+    if not m:
+        return []
+    out, base = [], None
+    for line in m.group(1).splitlines():
+        full = CLUSTER_ROW_ID_RE.match(line)
+        if full:
+            out.append(full.group(1))
+            base = full.group(1).rsplit(".", 1)[0] if "." in full.group(1) else None
+        if base:
+            out += [f"{base}.{n}" for n in CLUSTER_SHORT_RE.findall(line)]
+    return list(dict.fromkeys(out))
+
+
+def bead_chain(bid, index):
+    """bid, then its ancestors: the parent field and every dotted prefix (tsp-x.1.2 is under tsp-x.1), nearest first.
+    Cycle-safe; a bead missing from the index still yields its dotted prefixes."""
+    out, seen, todo = [], set(), [bid]
+    while todo:
+        b = todo.pop(0)
+        if not b or b in seen:
+            continue
+        seen.add(b)
+        out.append(b)
+        todo.append((index.get(b) or {}).get("parent"))
+        if "." in b:
+            todo.append(b.rsplit(".", 1)[0])
+    return out
+
+
+TARGET_CUE_RE = re.compile(r"\b(?:hardware[ \t]+)?rows?\b|\bevidence[ \t]+(?:to|on)\b", re.I)
+TARGET_REACH = 120      # chars after a cue within which a bead id is read as the thing the cue points at
+
+
+def declared_targets(text):
+    """Bead ids a bead's own text declares as its target rows: an id that follows 'row(s)', 'hardware rows' or
+    'evidence to/on' within TARGET_REACH chars, on the same line and in the same sentence ('parent X, row Y' declares
+    Y, not X). An id with no such cue is a reference (a roll-up bead lists the rows it covers), not a target."""
+    out = []
+    for para in re.split(r"\n[ \t]*\n", text or ""):
+        for cue in TARGET_CUE_RE.finditer(para):
+            seg = para[cue.end():cue.end() + TARGET_REACH].split("\n", 1)[0]
+            seg = re.split(r"\.(?=\s|$)", seg, 1)[0]
+            out += BEAD_RE.findall(seg)
+    return list(dict.fromkeys(out))
+
+
 def collect_beads():
     """Return (index, ready_ids). index: id -> slim bead record for every bead."""
     index, ready = {}, []
     rc, out, errtxt = run_cmd(["bd", "list", "--all", "--json", "--flat", "-n", "0"], BD_TIMEOUT_S, cwd=MC)
     if rc != 0 or not out.strip():
         err("bd list --all", f"rc={rc} {errtxt.strip()[:300]}")
-        return index, ready
+        raise SourceReadError(f"bd list --all: rc={rc} {errtxt.strip()[:300]}")
     try:
         rows = json.loads(out)
     except Exception as ex:
         err("bd list --all (json)", ex)
-        return index, ready
+        raise SourceReadError(f"bd list --all json: {ex}") from ex
     for r in rows:
         md = r.get("metadata") or {}
         deps = [{"id": d.get("depends_on_id"), "type": d.get("type")}
@@ -326,15 +445,23 @@ def collect_beads():
             "closed_at": r.get("closed_at"), "started_at": r.get("started_at"),
             "comment_count": r.get("comment_count"), "deps": deps,
             "labels": [x for x in (r.get("labels") or []) if isinstance(x, str)],
+            "rows": cluster_rows(r.get("description")),
+            # 2026-11-05: row evidence from kit windows. targets = the bead ids the title/description declares as its
+            # target rows (declared_targets); cluster_ids = the row beads a gpu-16 cluster bead lists under '## Rows'
+            "targets": [t for t in declared_targets((r.get("title") or "") + "\n"
+                                                    + (r.get("description") or "")[:HW_MENTION_TEXT_MAX]) if t != r["id"]],
+            "cluster_ids": cluster_row_mentions(r.get("description")),
         }
     rc, out, errtxt = run_cmd(["bd", "ready", "--json", "-n", "0"], BD_TIMEOUT_S, cwd=MC)
     if rc != 0 or not out.strip():
         err("bd ready", f"rc={rc} {errtxt.strip()[:300]}")
+        raise SourceReadError(f"bd ready: rc={rc} {errtxt.strip()[:300]}")
     else:
         try:
             ready = [r["id"] for r in json.loads(out)]
         except Exception as ex:
             err("bd ready (json)", ex)
+            raise SourceReadError(f"bd ready json: {ex}") from ex
     return index, ready
 
 
@@ -344,284 +471,960 @@ def fetch_comments(bid):
         return bid, None, f"rc={rc} {errtxt.strip()[:200]}"
     try:
         rows = json.loads(out) if out.strip() else []
+        rows.sort(key=lambda c: c.get("created_at") or "")
+        recent = []
+        for comment in rows[-RULING_COMMENTS_MAX:]:
+            body = comment.get("text") or comment.get("body") or comment.get("comment") or ""
+            recent.append({"created_at": comment.get("created_at"), "body": str(body)[:RULING_COMMENT_BYTES]})
         last = max((c.get("created_at") or "" for c in rows), default=None)
-        return bid, {"count": len(rows), "last": last or None}, None
+        return bid, {"count": len(rows), "last": last or None, "comments": recent}, None
     except Exception as ex:
         return bid, None, str(ex)
 
 
 # -------------------------------------------------------------------- lanes --
-TS_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (.*)$")
-STATUS_RE = re.compile(r"^status\(result#(\d+)\):\s*(.*)$")
-TOKEN_RE = re.compile(r"^([A-Z0-9_]+_STATUS)\s+state=([A-Za-z_]+)\s*(.*)$")
+# 2026-11-02 (tsp-mc9m.60.29.84.14): the fleet is gpu-16's managed lanes, not gpu-14's drive logs (retired). Sources,
+# all read-only (watch-runs.py helpers are imported, never its loop; no run.send/release/recover/ack):
+#   <G16>/runs/active.tsv            NAME<TAB>run_id[<TAB>home]; '#' rows are released (counted, not shown)
+#   <G16>/homes.json                 pf-task homes (watch-runs.py active_runs()/pft() through g16_homes.py)
+#   pf-task run.status               one primary-key call per lane on that lane's home
+#   <G16>/runs/receipts-<NAME>.jsonl the watcher's preserved receipts: the newest G16_<CLUSTER>_STATUS line of the run
 KV_RE = re.compile(r"(\w+)=(\S+)")
-RUN_RE = re.compile(r"driver start run=(pft-[0-9a-f]{24})")
 PR_RE = re.compile(r"^([\w.-]+/[\w.-]+)#(\d+)$")
-HEX64_RE = re.compile(r"[0-9a-f]{64}")
-# window-queue.sh field(): the FIRST whitespace-delimited gen= value, trailing `*,; stripped, must be 32 hex.
-STATUS_GEN_RE = re.compile(r"(?:^|\s)gen=(\S+)")
 BEAD_RE = re.compile(r"(tsp-[a-z0-9]+(?:\.[0-9]+)*)")
+G16 = os.environ.get("FB_GPU16_DIR") or "/home/matt/recovery/gpu16"
+G16_RUNS = os.path.join(G16, "runs")
+G16_STATUS_RE = re.compile(r"G16_([A-Z0-9]+)_STATUS:[ \t]*([A-Z_]+)\b[ \t]*([^\n]*)")
+# pf-task keeps a recovered usage-limit blocker's text and projects state=blocked after the run completed turns again
+# (tsp-mc9m.60.29.84.11). Such a run is idle or working by its latest receipt, not blocked.
+G16_QUOTA_BLOCKER_RE = re.compile(r"^(?:usage_limit_exceeded|provider_retry_budget_exhausted):")
+G16_BAD_STATES = {"blocked", "failed", "interruption_unknown", "permission_blocked"}
+G16_RECEIPTS_MAX_BYTES = 8 << 20  # receipts-<NAME>.jsonl read per lane per refresh
+_G16W = None
 
 
-def parse_lane_log(path):
-    lane = {"lane": os.path.basename(path)[:-len("-drive.log")], "log": path,
-            "log_mtime": iso(os.path.getmtime(path)), "runs": [], "statuses": [],
-            "ci_waits": [], "turn_ends": [], "driver_starts": [], "last_event_at": None,
-            "last_line": None, "token": None}
+def g16_watch():
+    """watch-runs.py loaded as a module for its read-only helpers (active_runs, pft, text, BENCH_REQUEST_FILE_RE)."""
+    global _G16W
+    if _G16W is None:
+        import importlib.util
+        os.environ.setdefault("G16_RUNS_DIR", G16_RUNS)
+        spec = importlib.util.spec_from_file_location("g16_watch_runs", os.path.join(G16, "watch-runs.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _G16W = mod
+    return _G16W
+
+
+def g16_released_rows():
+    """'#' rows of active.tsv -> [{lane, run}] (e.g. '#RELEASED BDLOCK<TAB>pft-...')."""
+    out = []
     try:
+        with open(os.path.join(G16_RUNS, "active.tsv")) as f:
+            for line in f:
+                if line.startswith("#") and "\t" in line:
+                    c = line.rstrip("\n").split("\t")
+                    words = c[0].lstrip("#").split()
+                    out.append({"lane": words[-1] if words else c[0], "run": c[1]})
+    except OSError as ex:
+        err("active.tsv", ex)
+    return out
+
+
+def g16_status_line(final):
+    """The last G16_<CLUSTER>_STATUS line of a receipt's final text -> {cluster, verdict, detail, raw, kv} | None."""
+    ms = list(G16_STATUS_RE.finditer(final or ""))
+    if not ms:
+        return None
+    m = ms[-1]
+    detail = m.group(3).strip()
+    kv = dict(KV_RE.findall(detail))
+    return {"cluster": m.group(1), "verdict": m.group(2), "state": m.group(2), "detail": detail[:400],
+            "raw": m.group(0).strip()[:400], "kv": kv, "reason": kv.get("reason")}
+
+
+def g16_receipts(name, run_id=None, limit=None):
+    """receipts-<NAME>.jsonl newest first -> [(receipt, status_line|None)] for run_id (None: any run), plus the
+    file's mtime and the receipt on its last line. limit bounds the receipts parsed."""
+    path = os.path.join(G16_RUNS, f"receipts-{name}.jsonl")
+    try:
+        size = os.path.getsize(path)
+        mtime = os.path.getmtime(path)
         with open(path, errors="replace") as f:
+            if size > G16_RECEIPTS_MAX_BYTES:
+                f.seek(size - G16_RECEIPTS_MAX_BYTES)
+                f.readline()  # drop the partial first line
             lines = f.read().splitlines()
-    except Exception as ex:
-        err(f"lane log {path}", ex)
-        return lane
-    for ln in lines:
-        m = TS_RE.match(ln)
-        if not m:
-            continue
-        ts, rest = m.group(1), m.group(2)
-        lane["last_event_at"] = ts
-        lane["last_line"] = ln[:300]
-        rm = RUN_RE.search(rest)
-        if rm:
-            lane["runs"].append(rm.group(1))
-            lane["driver_starts"].append(ts)
-            continue
-        sm = STATUS_RE.match(rest)
-        if sm:
-            n, body = int(sm.group(1)), sm.group(2).strip()
-            st = {"n": n, "ts": ts, "raw": body[:400], "state": "NONE", "reason": None, "kv": {}, "gen": None}
-            # 2026-10-19: the window-queue generation, read from the whole line (raw is clipped at 400 chars)
-            gm = STATUS_GEN_RE.search(body)
-            gv = re.sub(r"[`*,;]+$", "", gm.group(1)) if gm else ""
-            st["gen"] = gv if re.fullmatch(r"[0-9a-f]{32}", gv) else None
-            tm = TOKEN_RE.match(body)
-            if tm:
-                lane["token"] = tm.group(1)
-                st["state"] = tm.group(2).upper()
-                kv = dict(KV_RE.findall(tm.group(3)))
-                st["kv"] = kv
-                st["reason"] = kv.get("reason")
-            lane["statuses"].append(st)
-            continue
-        if rest.startswith("CI_WAIT "):
-            kv = dict(KV_RE.findall(rest))
-            lane["ci_waits"].append({"ts": ts, "pr": kv.get("pr"), "head": kv.get("head"), "result": None,
-                                     "result_ts": None, "pass": None, "fail": None})
-            continue
-        if rest.startswith("CIW result="):
-            kv = dict(KV_RE.findall(rest))
-            if lane["ci_waits"]:
-                cw = lane["ci_waits"][-1]
-                cw.update({"result": kv.get("result"), "result_ts": ts,
-                           "pass": kv.get("pass"), "fail": kv.get("fail"), "now": kv.get("now")})
-            continue
-        if "TURN_END" in rest:
-            kv = dict(KV_RE.findall(rest))
-            lane["turn_ends"].append({"ts": ts, "state": kv.get("state"), "wake_reason": kv.get("wake_reason")})
-    return lane
-
-
-def live_drivers():
-    """run_id -> {pids:[], lane, token} for every live lane-drive.sh."""
-    out = {}
-    rc, txt, e = run_cmd(["ps", "-eo", "pid,etimes,args"], 20)
-    if rc != 0:
-        err("ps", e)
-        return out
-    rx = re.compile(r"^\s*(\d+)\s+(\d+)\s+(?:/bin/)?bash\s+\S*lane-drive\.sh\s+(pft-[0-9a-f]{24})\s+(\S+)\s+(\S+)\s+(\S+)")
-    for ln in txt.splitlines():
-        m = rx.match(ln)
-        if m:
-            d = out.setdefault(m.group(3), {"pids": [], "lane": m.group(6), "token": m.group(4), "etimes": 0})
-            d["pids"].append(int(m.group(1)))
-            d["etimes"] = max(d["etimes"], int(m.group(2)))
-    return out
-
-
-def admission_map():
-    """run_id -> {task, model, provider, runtime, file, mtime}"""
-    out = {}
-    for f in glob.glob(os.path.join(G, "admission-*.json")):
+    except FileNotFoundError:
+        return [], None, None
+    out, last = [], None
+    w = g16_watch()
+    for raw in reversed(lines):
         try:
-            d = json.load(open(f))
-            rid = d.get("run_id")
-            if not rid:
-                continue
-            prov = d.get("provenance") or {}
-            model = ((prov.get("model") or {}).get("modelID") or {}).get("text")
-            provider = ((prov.get("model") or {}).get("providerID") or {}).get("text")
-            out[rid] = {"task": d.get("task"), "model": model, "provider": provider,
-                        "runtime": prov.get("runtime"), "file": os.path.basename(f),
-                        "mtime": os.path.getmtime(f)}
-        except Exception as ex:
-            err(f"admission {os.path.basename(f)}", ex)
-    return out
+            res = json.loads(raw)
+        except ValueError:
+            continue
+        ev = res.get("evidence") or {}
+        rid = res.get("receipt") or ev.get("receipt")
+        if last is None:
+            last = rid
+        if run_id and ev.get("run_id") != run_id:
+            continue
+        out.append((rid, g16_status_line(w.text(res.get("final_text")))))
+        if limit and len(out) >= limit:
+            break
+    return out, mtime, last
 
 
-def load_cache():
-    try:
-        return json.load(open(CACHE))
-    except Exception:
-        return {}
+def g16_quota_episode(nr):
+    """Newest epoch of the run's native_recovery.retryable episode (first/observed/last/recovered_at), 0 if none."""
+    rt = (nr or {}).get("retryable") or {}
+    return max((rt[k] for k in ("first_at", "observed_at", "last_at", "recovered_at")
+                if isinstance(rt.get(k), (int, float))), default=0)
 
 
-def save_cache(c):
-    try:
-        os.makedirs(os.path.dirname(CACHE), exist_ok=True)
-        tmp = CACHE + ".new"
-        json.dump(c, open(tmp, "w"), indent=0, sort_keys=True)
-        os.replace(tmp, CACHE)
-    except Exception as ex:
-        err("cache write", ex)
+def g16_stale_quota(rs, blocker, nr, last_turn):
+    """True when a `blocked` run's blocker is the kept usage-limit text of a quota episode that the run has since
+    completed a turn after (.84.11). Unknown episode or turn time -> False (stays blocked)."""
+    rx = getattr(g16_watch(), "QUOTA_BLOCKER_RE", None) or G16_QUOTA_BLOCKER_RE   # the watcher's own quota-text rule
+    if rs != "blocked" or not rx.match(blocker or ""):
+        return False
+    episode = g16_quota_episode(nr)
+    ended = last_turn.get("ended_at") if isinstance(last_turn.get("ended_at"), (int, float)) else 0
+    return bool(episode and ended and ended > episode and last_turn.get("receipt"))
 
 
-def resolve_run_home(run_id):
-    rc, out, error = run_cmd(
-        [RUN_HOME_RESOLVER, "lookup", run_id], PFTASK_TIMEOUT_S)
-    try:
-        value = json.loads(out)
-    except Exception:
-        return None, f"run home unresolved: rc={rc} {error[:120]}"
-    if rc or not isinstance(value, dict):
-        return None, f"run home unresolved: rc={rc} {error[:120]}"
-    return value, None
-
-
-def pftask_status(run_id, home=None):
-    """One primary-key run.status lookup. Returns slim dict or {'error': ...}."""
-    if home is None:
-        home, error = resolve_run_home(run_id)
-        if error:
-            return {"error": error}
-    cmd = [home["pf_task"], "--home", home["control_home"], "--role", "coordinator", "run.status",
-           json.dumps({"run_id": run_id})]
-    rc, out, e = run_cmd(cmd, PFTASK_TIMEOUT_S,
-                         env={"PF_TASK_HOST_CONFIG": home["host_config"]})
-    try:
-        d = json.loads(out) if out.strip() else {}
-    except Exception:
-        return {"error": f"rc={rc} non-json: {out[:120]} {e[:120]}"}
-    if not d:
-        return {"error": f"rc={rc} {e.strip()[:200] or 'empty output'}"}
-    if d.get("status") == "refused" or "state" not in d:
-        return {"error": f"refused: {d.get('reason') or json.dumps(d)[:160]}"}
-    prov = d.get("provenance") or {}
-    model = ((prov.get("model") or {}).get("modelID") or {}).get("text")
-    provider = ((prov.get("model") or {}).get("providerID") or {}).get("text")
-    runtime = prov.get("runtime")
-    sid = d.get("session_id")
-    if not runtime:
-        runtime = "opencode" if (sid or "").startswith("ses_") else ("codex" if sid else None)
-    lt = d.get("last_turn") or {}
-    blk = d.get("blocker") or {}
-    return {
-        "state": d.get("state"), "task": d.get("task"), "session_id": sid,
-        "reconciler_alive": d.get("reconciler_alive"), "controller_alive": d.get("controller_alive"),
-        "runtime_alive": d.get("runtime_alive"),
-        "native_activity_age_s": d.get("native_activity_age_seconds"),
-        "messages_total": ((d.get("messages") or {}).get("total")
-                           if home["control_home"] == "/home/matt/.pf-task-v2" else None),
-        "last_turn_end": iso(lt.get("ended_at")) if isinstance(lt.get("ended_at"), (int, float)) else None,
-        "last_turn_reason": lt.get("reason"),
-        "worktree": (d.get("worktree") or {}).get("text") if isinstance(d.get("worktree"), dict) else d.get("worktree"),
-        "blocker_state": blk.get("state"),
-        "blocker_error": ((blk.get("error") or {}).get("text") or "")[:300],
-        "runtime_parked": (d.get("runtime_parked") or {}).get("phase") if d.get("runtime_parked") else None,
-        "model": model, "provider": provider, "runtime": runtime,
-        "run_home": home["control_home"], "run_home_revision": home["revision"],
-    }
-
-
-def collect_lanes(drivers, adm, cache):
+def collect_g16_lanes(index=None):
+    """One row per active.tsv lane: run.status, the newest G16 status line and the board state."""
+    w = g16_watch()
     lanes = []
-    cutoff = time.time() - LANE_LOG_WINDOW_H * 3600
-    for path in sorted(glob.glob(os.path.join(G, "*-drive.log"))):
+    try:
+        rows = w.active_runs()
+    except Exception as ex:
+        err("active.tsv", ex)
+        return lanes
+    for name, rid, home in rows:
+        ln = {"lane": name, "run": rid, "home": home, "token": None, "statuses": [], "ci_waits": [], "pr": None,
+              "source": "active.tsv", "driver_alive": False, "run_checked_at": iso(NOW), "run_fresh": True}
         try:
-            if os.path.getmtime(path) < cutoff:
-                continue
+            st = w.pft("run.status", {"run_id": rid}, home)
+        except Exception as ex:
+            st = {"error": f"{type(ex).__name__}: {str(ex)[:160]}"}
+        if not isinstance(st, dict) or "state" not in st:
+            ln["run_error"] = (st or {}).get("error") or f"refused: {json.dumps(st)[:160]}"
+            err(f"run.status {name}", ln["run_error"])
+            st = {}
+        prov = st.get("provenance") or {}
+        lt = st.get("last_turn") or {}
+        blk = st.get("blocker") or {}
+        msgs, rcpt = st.get("messages") or {}, st.get("receipts") or {}
+        rs = st.get("state")
+        blocker = w.text(blk.get("blocker")) or w.text(blk.get("error"))
+        nr = st.get("native_recovery") or blk.get("native_recovery")
+        ln.update({
+            "run_state": rs, "bead": st.get("task"), "session_id": st.get("session_id"),
+            "model": w.text((prov.get("model") or {}).get("modelID")) or None,
+            "provider": w.text((prov.get("model") or {}).get("providerID")) or None,
+            "runtime": prov.get("runtime"), "worktree": w.text(st.get("worktree")) or None,
+            "controller_alive": st.get("controller_alive"), "runtime_alive": st.get("runtime_alive"),
+            "reconciler_alive": st.get("reconciler_alive"),
+            "native_activity_age_s": st.get("native_activity_age_seconds"),
+            "last_turn_end": iso(lt.get("ended_at")) if isinstance(lt.get("ended_at"), (int, float)) else None,
+            "last_turn_reason": lt.get("reason"), "blocker_error": (blocker or "")[:300] or None,
+            "messages_pending": msgs.get("pending"), "messages_total": msgs.get("total"),
+            "receipts_total": rcpt.get("total"), "receipts_unacked": rcpt.get("unacknowledged"),
+        })
+        ln["driver_alive"] = bool(st.get("controller_alive") and st.get("reconciler_alive"))
+        ln["bead_title"] = (index.get(ln["bead"]) or {}).get("title") if ln["bead"] and index else None
+        # the newest receipt of this run that carries a status line; its time is the turn end when it is the turn's
+        # receipt, else the receipts file mtime when it is the file's last line (the watcher appends within a minute)
+        found, mtime, last_in_file = g16_receipts(name, rid, limit=40)
+        ls = None
+        for rec, line in found:
+            if line:
+                ls = dict(line, receipt=rec, ts=None, age_src=None)
+                if rec == lt.get("receipt") and ln["last_turn_end"]:
+                    ls["ts"], ls["age_src"] = ln["last_turn_end"], "turn end"
+                elif rec == last_in_file and mtime:
+                    ls["ts"], ls["age_src"] = iso(mtime), "receipt log"
+                ls["newest"] = rec == (found[0][0] if found else None)
+                break
+        ln["last_status"] = ls
+        ln["statuses"] = [ls] if ls else []
+        ln["token"] = f"G16_{ls['cluster']}_STATUS" if ls else None
+        ln["status_age_s"] = age_s(parse_ts(ls["ts"])) if ls and ls.get("ts") else None
+        verdict = (ls or {}).get("verdict")
+        ln["stale_quota"] = g16_stale_quota(rs, blocker, nr, lt)
+        if ln.get("run_error"):
+            live, cls, why = "unknown", "unknown", ln["run_error"]
+        elif rs in ("busy", "pending"):
+            na = ln["native_activity_age_s"]
+            live, cls = "working", "running"
+            why = "turn in progress" + (f", native activity {fmt_age(na)} ago" if na is not None else "")
+        elif rs == "awaiting_release" or ln["stale_quota"]:
+            live = "working" if verdict == "WORKING" else "idle"
+            cls = "running" if live == "working" else "waiting"
+            if verdict == "HANDBACK" and (ln["receipts_unacked"] or 0) > 0:
+                cls = "needs"
+            why = (f"turn ended {fmt_age(age_s(parse_ts(ln['last_turn_end'])))} ago" if ln["last_turn_end"] else "turn ended")
+            if verdict is None:
+                why += "; no G16 status line"
+            elif verdict == "HANDBACK":
+                why += "; HANDBACK " + ("not yet acknowledged by gpu-16" if cls == "needs" else "acknowledged by gpu-16")
+            elif verdict == "WORKING":
+                why += "; status WORKING (its children or a pending result own the next step)"
+            else:
+                why += f"; status {verdict}"
+            if ln["stale_quota"]:
+                why = (f"pf-task says blocked on kept quota text (.84.11); the run completed a turn at "
+                       f"{short_iso(ln['last_turn_end'])} after the quota episode "
+                       f"({short_iso(iso(g16_quota_episode(nr)))}): {why}")
+        elif rs == "released":
+            live, cls, why = "released", "released", "run released"
+        elif rs in G16_BAD_STATES:
+            live, cls = rs, "needs"
+            why = f"pf-task {rs}" + (f": {blocker[:200]}" if blocker else "")
+        else:
+            live, cls, why = rs or "unknown", "unknown", f"pf-task state {rs}"
+        ln.update({"state": live, "cls": cls, "cls_reason": why[:400], "kind": None, "next": ""})
+        lanes.append(ln)
+    return lanes
+
+
+def short_iso(ts):
+    """2026-11-02T19:28:21Z -> 11-02 19:28Z"""
+    return (ts[5:16].replace("T", " ") + "Z") if ts else "?"
+
+
+# ------------------------------------------------------------------- device --
+# 2026-11-02 (tsp-mc9m.60.29.84.14): the bench is the BENCH lane plus pf-kit-window-runner. The window queue
+# (window-queue.sh) and the kits queue (queue-runner.sh) are retired and no longer read. Sources (read-only):
+#   BENCH's newest G16_BENCH_STATUS line (any BENCH run), and the newest runner=/dut=/place= values on one
+#   systemctl --user show pf-kit-window-runner.service (ActiveState, MainPID, deployed clone from ExecStart)
+#   <KIT_WINDOWS>/boot-open-<gen>.json of the last BENCH_QUEUE_WINDOW_H hours + <gen>/{runner,active,terminal}.json
+#   <G16>/runs/relay-sent.json       {"<TARGET> <sha256>": {from, file, at}}: each lane's newest request to BENCH and
+#                                    whether BENCH relayed anything back to that lane after it (watch-runs.py rule)
+#   typed results, last 24 h: the kit windows' close records (collect_windows rows, read again for terminal.json) and the
+#   BENCH-RESULT*.json / *BENCH-RESULT*.txt / DEPLOY-RECEIPT*.txt files under TYPED_RESULTS_ROOT (find -maxdepth)
+KIT_WINDOWS = os.environ.get("PF_KIT_WINDOWS_DIR") or os.path.expanduser("~/.local/state/pocketforge/kit-windows")
+RUNNER_UNIT = "pf-kit-window-runner.service"
+BENCH_QUEUE_WINDOW_H = 24       # requests relayed to BENCH within this window form the BENCH queue
+WINDOWS_SHOW = 6                # recent kit windows listed
+BENCH_KV_KEYS = ("runner", "dut", "place")
+BENCH_KV_RECEIPTS = 60          # BENCH receipts searched for the newest runner=/dut=/place= values
+TYPED_RESULTS_ROOT = os.environ.get("FB_TYPED_RESULTS_ROOT") or "/home/matt/recovery"
+TYPED_RESULTS_DEPTH = 4
+TYPED_RESULTS_WINDOW_H = 24
+TYPED_RESULTS_SHOW = 40
+TYPED_RESULT_MAX_BYTES = 4 << 20
+TYPED_REQUEST_SLACK_H = 8       # a window closes at most MaxTotalSeconds (7 h) after its request: read requests this much older
+TYPED_STEP_STDOUT_MAX = 1 << 20  # bytes read of each step's payload stdout (the watcher reads 4 MiB; a result line is near the end)
+TYPED_GOOD = {"PASS", "OK", "SUCCESS", "CLEAN", "DONE"}
+TYPED_WARN = {"REFUSED", "SKIPPED", "WAITING", "PARTIAL"}   # refused before mutation / stopped on a ruling; any other non-pass state is crit
+TYPED_MUTED = {"UNCLASSIFIED"}                              # a note with no Outcome the parser could place
+GEN_RE = re.compile(r"[0-9a-f]{32}")
+# watch-runs.py's WINDOW_RESULT event rules (tsp-hqm1p.179), re-stated here: the watcher is a daemon module, not a library
+KIT_NORMAL_REASONS = frozenset({"lane_done", "success"})   # terminal.json Reason values that are not themselves a failure
+KIT_STEP_ID_RE = re.compile(r"^(.+)-[0-9a-f]{12}$")        # a step's RequestID is <step>-<12 hex>; boot-open's is the bare generation
+KIT_PAYLOAD_FAIL_RE = re.compile(r"^(PF_[A-Za-z0-9_]+)\b[^\n]*?\bresult=(?i:FAIL(?:ED|URE)?|ERROR|REFUSED)\b[^\n]*", re.M)
+KIT_PAYLOAD_REASON_RE = re.compile(r"\breason=([A-Za-z0-9_.:-]+)")
+KIT_FAILS_MAX = 3               # failing steps named in typed_cause before "+Nmore"
+# lane-written *BENCH-RESULT*.txt: the first `Outcome:` line, classified on its first clause (prose, so a heuristic)
+NOTE_OUTCOME_RE = re.compile(r"^\s*outcome\s*[:=]\s*(.*\S)", re.I | re.M)
+NOTE_CLAUSE_SPLIT_RE = re.compile(r"(?<=[A-Za-z0-9)])[.;](?:\s|$)")
+NOTE_STATES = (("FAIL", re.compile(r"\bNOT A PASS\b|\bFAIL(?:ED|URE|S)?\b", re.I)), ("REFUSED", re.compile(r"\bREFUS(?:ED|AL)\b", re.I)),
+               ("PARTIAL", re.compile(r"\bPARTIAL\b", re.I)), ("PASS", re.compile(r"\bPASS(?:ED|ING)?\b", re.I)),
+               ("CLEAN", re.compile(r"\b(?:CLEAN|COMPLETED?)\b", re.I)))
+NOTE_REASON_RE = re.compile(r"\breason=([A-Za-z0-9_.:-]+)|\breason ([A-Za-z0-9]+(?:_[A-Za-z0-9]+)+)\b", re.I)
+NOTE_CAUSE_RE = re.compile(r"\bfailure_reason=([A-Za-z0-9_.:-]+)", re.I)
+
+
+def lane_base(name):
+    return re.sub(r"\d+$", "", name or "")
+
+
+def jread(path):
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def typed_sev(state):
+    s = (state or "").upper()
+    return "good" if s in TYPED_GOOD else ("warn" if s in TYPED_WARN else ("muted" if not s or s in TYPED_MUTED else "crit"))
+
+
+def typed_kind(base):
+    return ("bench-result" if base.endswith(".json") else "deploy-receipt" if base.startswith("DEPLOY-RECEIPT")
+            else "deploy-result" if "deploy" in base.lower() else "bench-result-txt")
+
+
+def typed_result_name(base):
+    """A file name the typed-results scan reads: BENCH-RESULT*.json (v1), DEPLOY-RECEIPT*.txt, or a lane's *BENCH-RESULT*.txt."""
+    return ((base.startswith("BENCH-RESULT") and base.endswith(".json")) or (base.startswith("DEPLOY-RECEIPT") and base.endswith(".txt"))
+            or ("BENCH-RESULT" in base and base.endswith(".txt")))
+
+
+def note_outcome(text):
+    """(state, reason, typed_cause) of a lane-written BENCH-RESULT note's `Outcome:` line, or None without one. The state is the first
+    of FAIL / REFUSED / PARTIAL / PASS / CLEAN that the line's first clause names ("RUNNER-LEVEL CLEAN, PAYLOAD FAIL" is FAIL),
+    UNCLASSIFIED when it names none; reason = the first reason=<token> (or `reason <snake_case>`), typed_cause = failure_reason=<token>."""
+    m = NOTE_OUTCOME_RE.search(text)
+    if not m:
+        return None
+    line = m.group(1)
+    clause = NOTE_CLAUSE_SPLIT_RE.split(line, 1)[0]
+    state = next((st for st, pat in NOTE_STATES if pat.search(clause)), "UNCLASSIFIED")
+    r, c = NOTE_REASON_RE.search(line), NOTE_CAUSE_RE.search(line)
+    return state, (r.group(1) or r.group(2)) if r else None, c.group(1) if c else None
+
+
+def read_typed(path, mtime):
+    """BENCH-RESULT*.json, *BENCH-RESULT*.txt or DEPLOY-RECEIPT*.txt -> {kind, state, reason, typed_cause, at, lane_hint, boundary}."""
+    base = os.path.basename(path)
+    out = {"path": path, "file": base, "mtime": iso(mtime), "at": iso(mtime), "state": None, "reason": None,
+           "typed_cause": None, "lane_hint": None, "boundary": None}
+    try:
+        if os.path.getsize(path) > TYPED_RESULT_MAX_BYTES:
+            out.update(kind=typed_kind(base), state="UNREAD", reason="file larger than TYPED_RESULT_MAX_BYTES")
+            return out
+        if base.endswith(".json"):
+            out["kind"] = "bench-result"
+            d = jread(path)
+            if d is None:
+                out.update(state="UNPARSED", reason="not a JSON object")
+                return out
+            # three schemas are live: State/Reason/TypedCause, lowercase state/reason, and pocketforge.bench-result/v1
+            # (Outcome/Reason, the typed failure in Failure.Error)
+            ci = {k.lower(): v for k, v in d.items()}
+            fail = ci.get("failure") if isinstance(ci.get("failure"), dict) else {}
+            out["state"] = str(ci.get("state") or ci.get("outcome") or "") or None
+            out["reason"] = str(ci.get("reason") or "") or None
+            out["typed_cause"] = str(ci.get("typedcause") or ci.get("typed_cause") or fail.get("Error") or "") or None
+            at = ci.get("observedatutc") or ci.get("observed_at")
+            if isinstance(at, str) and parse_ts(at):
+                out["at"] = at
+            out["lane_hint"] = ci.get("lane") or ci.get("discriminator")
+            b = ci.get("boundary") if isinstance(ci.get("boundary"), dict) else None
+            c = ci.get("close") if isinstance(ci.get("close"), dict) else None
+            if b:
+                out["boundary"] = {"dut": b.get("DUT"), "place": b.get("LabgridPlace")}
+            elif c:
+                out["boundary"] = {"dut": c.get("power_state"), "place": c.get("place")}
+        elif not base.startswith("DEPLOY-RECEIPT"):
+            # 2026-11-08 (tsp-hqm1p.181): the lanes' BENCH-RESULT notes are prose with an `Outcome:` line, not a schema
+            out["kind"] = typed_kind(base)
+            with open(path, errors="replace") as f:
+                got = note_outcome(f.read(16384))
+            if got is None:
+                out.update(state="UNCLASSIFIED", reason="no Outcome line")
+            else:
+                out["state"], out["reason"], out["typed_cause"] = got
+        else:
+            out["kind"] = "deploy-receipt"
+            with open(path, errors="replace") as f:
+                lines = [next(f, "") for _ in range(60)]
+            m = re.match(r"\s*DEPLOY_RECEIPT\b(.*)$", lines[0] if lines else "")
+            if not m:
+                out.update(state="UNPARSED", reason="first line is not DEPLOY_RECEIPT")
+                return out
+            kv = dict(KV_RE.findall(m.group(1)))
+            for l in lines[1:]:   # key=value lines below the first; the first line wins
+                mm = re.match(r"\s*(reason|typed_cause|typedcause)=(\S+)", l, re.I)
+                if mm:
+                    kv.setdefault(mm.group(1).lower(), mm.group(2))
+            out["state"] = kv.get("state")
+            out["reason"] = kv.get("reason")
+            out["typed_cause"] = kv.get("typed_cause") or kv.get("typedcause")
+    except Exception as ex:
+        out.update(kind=out.get("kind") or "?", state="UNREAD", reason=f"{type(ex).__name__}: {str(ex)[:120]}")
+    return out
+
+
+def kit_step_stdout(gen, seq):
+    """Text of GEN's step SEQ payload stdout (revision-input-<seq:06d>/*.stdout, staged candidate-* copies left out), "" when it has none."""
+    d = os.path.join(KIT_WINDOWS, gen, f"revision-input-{seq:06d}")
+    try:
+        names = sorted(n for n in os.listdir(d) if n.endswith(".stdout") and not n.startswith("candidate-"))
+    except OSError:
+        return ""
+    out = []
+    for n in names:
+        try:
+            with open(os.path.join(d, n), "rb") as fh:
+                out.append(fh.read(TYPED_STEP_STDOUT_MAX).decode("utf-8", "replace"))
         except OSError:
             continue
-        ln = parse_lane_log(path)
-        ln["source"] = "log"
-        ln["run"] = ln["runs"][-1] if ln["runs"] else None
-        lanes.append(ln)
-    # 2026-10-19: a re-driven run can leave an older drive log under another lane name (payloadfix-r3 ->
-    # payloadfix, same pft-b51a3e09). The run-matched driver made the stale log look alive and resurfaced its
-    # old HANDBACK as Needs gpu-14. Only the most recently active log for a run counts.
-    newest = {}
-    for ln in lanes:
-        if ln["run"] and (ln["run"] not in newest or (ln["last_event_at"] or "") > (newest[ln["run"]]["last_event_at"] or "")):
-            newest[ln["run"]] = ln
-    lanes = [ln for ln in lanes if not ln["run"] or newest[ln["run"]] is ln]
-    # admitted runs (recent admission file) with no lane log at all: nothing wakes gpu-14 for them
-    logged_runs = {l["run"] for l in lanes if l["run"]}
-    for rid, a in adm.items():
-        if rid in logged_runs or a["mtime"] < time.time() - ADMISSION_WINDOW_H * 3600:
+    return "\n".join(out)
+
+
+def kit_attempt_error(gen, seq):
+    """The Error of GEN's step SEQ receipt envelope (receipts/receipt-<seq:06d>-*.json), "" when it has none."""
+    pat = os.path.join(glob.escape(os.path.join(KIT_WINDOWS, gen, "receipts")), f"receipt-{seq:06d}-*.json")
+    for p in sorted(glob.glob(pat)):
+        d = jread(p)
+        if d and d.get("Error"):
+            return str(d["Error"])
+    return ""
+
+
+def kit_window_fails(gen, doc):
+    """[(step, reason)] of GEN's failed steps from its terminal.json DOC: the rules of the watcher's WINDOW_RESULT event (tsp-hqm1p.179,
+    watch-runs.py window_fails). Per Attempt: the `PF_<TAG> ... result=FAIL [reason=<token>]` lines of the step's payload stdout (the
+    runner receipt says pass when the helper exited 0; the payload is the truth), else the receipt's Error, else its Outcome. StepRows
+    with outcome fail. A Reason that is neither normal nor the generic `failure` over named steps is a failing `window` step
+    (for `failure` itself, failure.json's Reason when the runner wrote one)."""
+    fails = []
+
+    def add(step, reason):
+        item = (re.sub(r"[\s,]+", "_", str(step or "-").strip())[:60] or "-", re.sub(r"[\s,]+", "_", str(reason or "fail").strip())[:80] or "fail")
+        if item not in fails:
+            fails.append(item)
+
+    attempts = sorted((a for a in doc.get("Attempts") or [] if isinstance(a, dict) and isinstance(a.get("Sequence"), int)), key=lambda a: a["Sequence"])
+    for a in attempts:
+        rid, seq = str(a.get("RequestID") or ""), a["Sequence"]
+        m = KIT_STEP_ID_RE.match(rid)
+        step = m.group(1) if m else ("boot-open" if GEN_RE.fullmatch(rid) else rid or f"step-{seq}")
+        pays = []
+        for pm in KIT_PAYLOAD_FAIL_RE.finditer(kit_step_stdout(gen, seq)):
+            r = KIT_PAYLOAD_REASON_RE.search(pm.group(0))
+            item = (pm.group(1), r.group(1) if r else "")
+            if item not in pays:
+                pays.append(item)
+        for tag, reason in pays:
+            add(step, reason or tag)
+        outcome = str(a.get("Outcome") or "").lower()
+        if outcome != "pass" and not pays:
+            add(step, kit_attempt_error(gen, seq) or outcome or "fail")
+    for row in doc.get("StepRows") or []:
+        if isinstance(row, dict) and str(row.get("outcome") or "").lower() == "fail":
+            step = re.sub(r"[\s,]+", "_", str(row.get("step") or "-").strip())[:60]
+            if not any(f[0] == step for f in fails):
+                add(row.get("step"), "fail")
+    reason = str(doc.get("Reason") or "")
+    if reason and reason not in KIT_NORMAL_REASONS and not (reason == "failure" and fails):
+        # the generic close reason `failure` with no failing step: the runner's own failure.json names why (R51: post_open_ops_pending)
+        named = (jread(os.path.join(KIT_WINDOWS, gen, "failure.json")) or {}).get("Reason") if reason == "failure" else None
+        add("window", named or reason)
+    return fails
+
+
+def kit_window_result(row, floor_ts):
+    """A collect_windows ROW -> its typed-result item, or None while the window is open/activating or closed before FLOOR_TS (epoch).
+    The close record by precedence (the order collect_windows reads them): a failed boot-open (BOOT_OPEN_FAILED); the runner's
+    terminal.json (its End, CLEAN / DIRTY; FAILED / FAILED_DIRTY when a step failed: the watcher's outcome rule); a failed runner with
+    no terminal.json (RUNNER_FAILED, failure.json's Reason); a revoked window; a closed session whose runner never finalized
+    (UNFINALIZED)."""
+    gen, st = row["gen"], row.get("state") or ""
+    if row.get("open"):
+        return None
+    gd = os.path.join(KIT_WINDOWS, gen)
+    out = {"kind": "kit-window", "gen": gen, "file": None, "path": None, "mtime": None, "at": None, "state": None, "reason": None,
+           "typed_cause": None, "lane_reason": None, "purpose": row.get("purpose"), "lane_hint": row.get("lane"), "boundary": None}
+    term_p = os.path.join(gd, "terminal.json")
+    term = None if st == "boot-open failed" else jread(term_p)
+
+    def source(path, at=None):
+        base = os.path.basename(path)
+        out["path"] = path
+        out["file"] = base.replace(gen, gen[:8]) if gen in base else f"{gen[:8]}/{base}"
+        try:
+            mt = os.path.getmtime(path)
+        except OSError:
+            mt = None
+        out["mtime"] = iso(mt)
+        out["at"] = at if parse_ts(at) else (iso(mt) if mt is not None else row.get("last_activity") or row.get("requested_at"))
+
+    if st == "boot-open failed":
+        p = os.path.join(KIT_WINDOWS, f"boot-open-{gen}.failed.json")
+        d = jread(p) or {}
+        source(p, d.get("At"))
+        out["state"], out["reason"] = "BOOT_OPEN_FAILED", str(d.get("Reason") or "boot_open_failed")
+    elif term is not None:
+        pac = term.get("PowerAtClose")
+        source(term_p, pac.get("ClosedAt") if isinstance(pac, dict) else None)
+        fails = kit_window_fails(gen, term)
+        end = re.sub(r"\W+", "_", str(term.get("End") or "-")).strip("_").upper() or "-"
+        out["state"] = ("FAILED_DIRTY" if end == "DIRTY" else "FAILED") if fails else (end if end != "-" else "UNKNOWN")
+        out["reason"] = str(term.get("Reason") or "") or None
+        out["lane_reason"] = str(term.get("LaneReason") or "") or None
+        out["purpose"] = term.get("KitPurpose") or out["purpose"]
+        shown = [f"{a}:{b}" for a, b in fails[:KIT_FAILS_MAX]]
+        if len(fails) > KIT_FAILS_MAX:
+            shown.append(f"+{len(fails) - KIT_FAILS_MAX}more")
+        out["typed_cause"] = ",".join(shown) or None
+    elif st == "failed":
+        p = os.path.join(gd, "failure.json")
+        d = jread(p)
+        source(p if d is not None else os.path.join(gd, "runner.json"), (d or {}).get("At"))
+        out["state"], out["reason"] = "RUNNER_FAILED", str((d or {}).get("Reason") or "runner_failed")
+    elif st == "revoked":
+        p = os.path.join(gd, "revoked.json")
+        d = jread(p) or {}
+        source(p, d.get("At"))
+        out["state"], out["reason"] = "REVOKED", str(d.get("Reason") or "revoked")
+    elif st == "session closed, runner not finalized":
+        source(os.path.join(gd, "runner.json"), row.get("last_activity"))
+        out["state"], out["reason"] = "UNFINALIZED", "runner_not_finalized"
+    else:
+        return None
+    at = parse_ts(out["at"])
+    return out if at is not None and at.timestamp() >= floor_ts else None
+
+
+def kit_windows_closed(floor_ts):
+    """Window dirs under KIT_WINDOWS whose terminal.json was modified since FLOOR_TS (epoch). A bare stat() scan on purpose: no JSON and
+    nothing of kit_window_result, so a change to a close record's contents cannot blank this count the way it blanks the rows."""
+    n = 0
+    try:
+        names = os.listdir(KIT_WINDOWS)
+    except OSError:
+        return 0
+    for name in names:
+        if GEN_RE.fullmatch(name):
+            try:
+                if os.stat(os.path.join(KIT_WINDOWS, name, "terminal.json")).st_mtime >= floor_ts:
+                    n += 1
+            except OSError:
+                pass
+    return n
+
+
+def collect_typed_results(sent):
+    """Last TYPED_RESULTS_WINDOW_H h of typed results, newest first, with the lane BENCH relayed each one to.
+    Two sources: the kit windows' close records (kit_window_result over collect_windows rows) and the result files under
+    TYPED_RESULTS_ROOT (read_typed). 2026-11-08 (tsp-hqm1p.181): a source that yields no row while windows closed (terminal.json files
+    modified in the window, counted by kit_windows_closed) is a WARN in res["warns"]. The files source went blank on 11-03 when the
+    kit-window-runner pipeline replaced BENCH-RESULT*.json, and nothing said so for five days."""
+    res = {"window_h": TYPED_RESULTS_WINDOW_H, "root": TYPED_RESULTS_ROOT, "depth": TYPED_RESULTS_DEPTH, "windows_root": KIT_WINDOWS,
+           "items": [], "groups": [], "total": 0, "error": None, "by_kind": {}, "windows_closed": 0, "warns": []}
+    floor = NOW.timestamp() - TYPED_RESULTS_WINDOW_H * 3600
+    errors, items = [], []
+    try:
+        for row in collect_windows(lookback_h=TYPED_RESULTS_WINDOW_H + TYPED_REQUEST_SLACK_H):
+            try:
+                it = kit_window_result(row, floor)
+            except Exception as ex:   # a window whose record cannot be read is a visible row, not a missing one
+                it = {"kind": "kit-window", "gen": row.get("gen"), "file": (row.get("gen") or "")[:8], "path": None, "mtime": None,
+                      "at": row.get("requested_at"), "state": "UNREAD", "reason": f"{type(ex).__name__}: {str(ex)[:120]}",
+                      "typed_cause": None, "lane_reason": None, "purpose": row.get("purpose"), "lane_hint": row.get("lane"), "boundary": None}
+            if it:
+                items.append(it)
+    except Exception as ex:
+        errors.append(f"kit windows: {type(ex).__name__}: {str(ex)[:160]}")
+    # -H: /home/matt/recovery is a symlink to the programming tree; follow the starting point only
+    rc, out, e = run_cmd(["find", "-H", TYPED_RESULTS_ROOT, "-maxdepth", str(TYPED_RESULTS_DEPTH),
+                          "(", "-name", "BENCH-RESULT*.json", "-o", "-name", "DEPLOY-RECEIPT*.txt", "-o", "-name", "*BENCH-RESULT*.txt", ")",
+                          "-type", "f", "-mmin", f"-{TYPED_RESULTS_WINDOW_H * 60}", "-printf", "%T@\t%p\n"], 60)
+    if rc != 0 and not out.strip():
+        errors.append(f"find rc={rc}: {e.strip()[:200]}")
+        out = ""
+    relayed_to = {}
+    for pair, v in (sent or {}).items():
+        if isinstance(v, dict) and lane_base(str(v.get("from") or "")) == "BENCH" and v.get("file"):
+            relayed_to.setdefault(os.path.realpath(str(v["file"])), pair.split(" ", 1)[0])
+    for line in out.splitlines():
+        t, _, path = line.partition("\t")
+        try:
+            mtime = float(t)
+        except ValueError:
             continue
-        lanes.append({"lane": a["file"].replace("admission-", "").replace(".json", ""), "log": None,
-                      "log_mtime": iso(a["mtime"]), "runs": [rid], "run": rid, "statuses": [], "ci_waits": [],
-                      "turn_ends": [], "driver_starts": [iso(a["mtime"])], "last_event_at": iso(a["mtime"]),
-                      "last_line": f"admission {a['file']} (no lane log)", "token": None, "source": "admission"})
-    for ln in lanes:
-        d = drivers.get(ln["run"]) if ln["run"] else None
-        if not d:  # a driver may also be matched by lane name (same lane, re-driven run)
-            d = next((v for v in drivers.values() if v["lane"] == ln["lane"]), None)
-        ln["driver_alive"] = bool(d)
-        ln["driver_pids"] = d["pids"] if d else []
-        ln["driver_etimes"] = d["etimes"] if d else None
-        if d and not ln["token"]:
-            ln["token"] = d["token"]
-        ls = ln["statuses"][-1] if ln["statuses"] else None
-        ln["last_status"] = ls
-        a = adm.get(ln["run"]) if ln["run"] else None
-        ln["adm"] = a
-    # pf-task run.status: sequential, bounded, released runs cached forever
-    def prio(ln):
-        c = cache.get(ln["run"] or "", {})
-        checked = parse_ts(c.get("checked_at"))
-        ls = ln["last_status"]
-        last = parse_ts(ls["ts"]) if ls else parse_ts(ln["last_event_at"])
-        return (1 if ln["driver_alive"] else 0, checked.timestamp() if checked else 0,
-                -(last.timestamp() if last else 0))
-    budget_end = time.time() + PFTASK_BUDGET_S
-    done_runs = {}
-    for ln in sorted(lanes, key=prio):
-        rid = ln["run"]
-        if not rid:
-            ln["run_info"] = None
-            ln["run_fresh"] = False
+        it = read_typed(path, mtime)
+        it["lane"] = relayed_to.get(os.path.realpath(path))
+        items.append(it)
+    for it in items:
+        it.setdefault("lane", None)
+    if errors:
+        res["error"] = "; ".join(errors)
+        err("typed results", res["error"])
+    items.sort(key=lambda x: x.get("at") or "", reverse=True)
+    groups = {}
+    for it in items:
+        k = (it["kind"], it["state"] or "-", it["reason"] or "-", it["typed_cause"] or "-")
+        g = groups.setdefault(k, {"kind": k[0], "state": k[1], "reason": k[2], "typed_cause": k[3], "count": 0,
+                                  "latest_at": None, "lanes": [], "sev": typed_sev(it["state"])})
+        g["count"] += 1
+        g["latest_at"] = max(g["latest_at"] or "", it.get("at") or "") or None
+        lane = it["lane"] or it.get("lane_hint")
+        if lane and lane not in g["lanes"]:
+            g["lanes"].append(lane)
+        res["by_kind"][it["kind"]] = res["by_kind"].get(it["kind"], 0) + 1
+    res["groups"] = sorted(groups.values(), key=lambda g: (g["count"], g["latest_at"] or ""), reverse=True)
+    res["total"] = len(items)
+    res["items"] = items[:TYPED_RESULTS_SHOW]
+    res["windows_closed"] = closed = kit_windows_closed(floor)
+    if closed:
+        n_win = res["by_kind"].get("kit-window", 0)
+        for source, n_rows, what in (("kit-window", n_win, f"the kit-window close records under {KIT_WINDOWS}"),
+                                     ("files", res["total"] - n_win, f"the BENCH-RESULT / DEPLOY-RECEIPT files under {TYPED_RESULTS_ROOT}")):
+            if n_rows == 0:
+                res["warns"].append({"source": source, "windows_closed": closed,
+                                     "text": f"{what} yielded 0 rows, so the format they are read in may have changed"})
+    return res
+
+
+def collect_runner():
+    out = {"unit": RUNNER_UNIT, "active": None, "sub": None, "pid": None, "since": None, "deployed": None, "error": None}
+    rc, txt, e = run_cmd(["systemctl", "--user", "show", "-p", "ActiveState", "-p", "SubState", "-p", "MainPID",
+                          "-p", "ActiveEnterTimestamp", "-p", "ExecStart", RUNNER_UNIT], 20)
+    if rc != 0:
+        out["error"] = f"systemctl rc={rc}: {e.strip()[:160]}"
+        err("runner unit", out["error"])
+        return out
+    for line in txt.splitlines():
+        k, _, v = line.partition("=")
+        if k == "ActiveState":
+            out["active"] = v
+        elif k == "SubState":
+            out["sub"] = v
+        elif k == "MainPID":
+            out["pid"] = int(v) if v.isdigit() and v != "0" else None
+        elif k == "ActiveEnterTimestamp":
+            out["since"] = v or None
+        elif k == "ExecStart":
+            m = re.search(r"/deploy-clones/(pa-[A-Za-z0-9-]+)/", v)
+            out["deployed"] = m.group(1) if m else None
+    return out
+
+
+def collect_windows(lookback_h=None):
+    """pf-kit-window-runner generations requested in the last LOOKBACK_H (default BENCH_QUEUE_WINDOW_H) hours, newest first."""
+    rows = []
+    cutoff = NOW.timestamp() - (lookback_h or BENCH_QUEUE_WINDOW_H) * 3600
+    try:
+        names = os.listdir(KIT_WINDOWS)
+    except FileNotFoundError:
+        return rows
+    except OSError as ex:
+        err("kit-windows", ex)
+        return rows
+    for name in names:
+        m = re.fullmatch(r"boot-open-([0-9a-f]{32})\.json", name)
+        if not m:
             continue
-        if rid in done_runs:
-            ln["run_info"], ln["run_fresh"], ln["run_checked_at"] = done_runs[rid]
+        try:
+            mt = os.path.getmtime(os.path.join(KIT_WINDOWS, name))
+        except OSError:
             continue
-        home, home_error = resolve_run_home(rid)
-        c = cache.get(rid)
-        cache_matches = bool(c and home and (
-            (c.get("run_home") == home["control_home"]
-             and c.get("run_home_revision") == home["revision"])
-            or (not c.get("run_home") and not c.get("run_home_revision")
-                and home["control_home"] == "/home/matt/.pf-task-v2")))
-        if home_error:
-            info, fresh, at = {"error": home_error}, True, iso(NOW)
-        elif cache_matches and c.get("state") == "released":
-            info, fresh, at = {k: v for k, v in c.items() if k != "checked_at"}, False, c.get("checked_at")
-        elif time.time() + 5 > budget_end:
-            info = ({k: v for k, v in c.items() if k != "checked_at"}
-                    if cache_matches else None)
-            fresh, at = False, (c or {}).get("checked_at") if cache_matches else None
-            if info is None:
-                info = {"error": "not checked: pf-task time budget exhausted this refresh"}
+        if mt < cutoff:
+            continue
+        gen = m.group(1)
+        gd = os.path.join(KIT_WINDOWS, gen)
+        row = {"gen": gen, "requested_at": iso(mt), "state": "activating", "outcome": None, "open": False,
+               "lane": None, "purpose": None, "opened_at": None, "deadline": None, "last_activity": None}
+        failed = jread(os.path.join(KIT_WINDOWS, f"boot-open-{gen}.failed.json"))
+        runner, active, term = jread(os.path.join(gd, "runner.json")), jread(os.path.join(gd, "active.json")), \
+            jread(os.path.join(gd, "terminal.json"))
+        if active:
+            row.update(lane=active.get("Lane"), purpose=active.get("KitPurpose"), opened_at=active.get("OpenedAt"),
+                       deadline=active.get("Deadline"))
+        if runner:
+            row["last_activity"] = runner.get("LastActivity")
+        if failed:
+            row.update(state="boot-open failed", outcome=f"{failed.get('Reason') or '?'} at {failed.get('At') or '?'}")
+        elif term:
+            row.update(state=str(term.get("State") or "closed"),
+                       outcome=f"{term.get('End') or '?'} {term.get('Reason') or ''}".strip())
+        elif runner:
+            row["state"] = str(runner.get("State") or "unknown")
+            anc = (active or {}).get("AnchorPath") or ""
+            if row["state"] == "open" and anc and os.path.exists(os.path.join(os.path.dirname(anc), "terminal.json")):
+                row["state"] = "session closed, runner not finalized"
+        elif os.path.exists(os.path.join(gd, "revoked.json")):
+            row["state"] = "revoked"
+        row["open"] = row["state"] in ("open", "activating")
+        rows.append(row)
+    rows.sort(key=lambda r: r["requested_at"], reverse=True)
+    return rows
+
+
+def hw_window_bead(holder):
+    """A window's Holder is '<bead>.<generation>' (the lane's bead, then the 32-hex generation) -> <bead>."""
+    h = re.sub(r"\.[0-9a-f]{32}$", "", str(holder or ""))
+    return h if BEAD_RE.fullmatch(h) else None
+
+
+def collect_hw_windows(root=None, now=None, lookback_h=None):
+    """Kit-window runner results of the last HW_WINDOWS_LOOKBACK_H hours, newest first -> (windows, scanned).
+    scanned = boot-open requests read (a failed boot-open is scanned, never a result). A window is
+    {gen, bead, at, result ok|fail|open, state, reason, end, purpose, lane, source, receipt, pkg}: closed = the runner's
+    terminal.json (ok = State closed with Reason lane_done/success, the rule velocity.py uses; at = PowerAtClose.ClosedAt,
+    else revoked.json At, else the file's mtime), open = requested within HW_WINDOW_INFLIGHT_H with no terminal yet. A
+    request with no terminal older than that is stale and skipped. bead = the Holder bead from active.json, else the
+    boot-open request."""
+    root, now = root or KIT_WINDOWS, now or NOW
+    cutoff = now.timestamp() - (lookback_h or HW_WINDOWS_LOOKBACK_H) * 3600
+    out, scanned = [], 0
+    try:
+        names = os.listdir(root)
+    except FileNotFoundError:
+        return out, scanned
+    except OSError as ex:
+        err("kit-windows (hardware rows)", ex)
+        return out, scanned
+    for name in names:
+        m = re.fullmatch(r"boot-open-([0-9a-f]{32})\.json", name)
+        if not m:
+            continue
+        gen, bo = m.group(1), os.path.join(root, name)
+        try:
+            req = os.path.getmtime(bo)
+        except OSError:
+            continue
+        if req < cutoff:
+            continue
+        scanned += 1
+        if os.path.exists(os.path.join(root, f"boot-open-{gen}.failed.json")):
+            continue
+        gd = os.path.join(root, gen)
+        active, term = jread(os.path.join(gd, "active.json")) or {}, jread(os.path.join(gd, "terminal.json"))
+        holder = active.get("Holder") or (jread(bo) or {}).get("Holder")
+        anchor = str(active.get("AnchorPath") or "")
+        w = {"gen": gen, "bead": hw_window_bead(holder), "lane": active.get("Lane"),
+             "purpose": (term or {}).get("KitPurpose") or active.get("KitPurpose"), "state": None, "reason": None,
+             "end": None, "source": None, "receipt": None,
+             "pkg": os.path.dirname(os.path.dirname(anchor)) if anchor.startswith("/") else None}
+        if term:
+            tp = os.path.join(gd, "terminal.json")
+            at = (term.get("PowerAtClose") or {}).get("ClosedAt")
+            if not parse_ts(at):
+                at = (jread(os.path.join(gd, "revoked.json")) or {}).get("At")
+            if not parse_ts(at):
+                try:
+                    at = iso(os.path.getmtime(tp))
+                except OSError:
+                    at = iso(req)
+            ok = term.get("State") == "closed" and term.get("Reason") in HW_WINDOW_OK_REASONS
+            w.update(at=at, result="ok" if ok else "fail", state=str(term.get("State") or ""),
+                     reason=str(term.get("Reason") or ""), end=str(term.get("End") or "") or None, source=tp,
+                     receipt=term.get("ReceiptPath"))
+        elif now.timestamp() - req <= HW_WINDOW_INFLIGHT_H * 3600:
+            w.update(at=iso(req), result="open")
         else:
-            info = pftask_status(rid, home)
-            fresh, at = True, iso(NOW)
-            if "error" not in info:
-                cache[rid] = dict(info, checked_at=at)
-            elif cache_matches:
-                info = dict({k: v for k, v in c.items() if k != "checked_at"}, error=info["error"])
-                fresh, at = False, c.get("checked_at")
-        done_runs[rid] = (info, fresh, at)
-        ln["run_info"], ln["run_fresh"], ln["run_checked_at"] = info, fresh, at
-    return lanes
+            continue
+        out.append(w)
+    out.sort(key=lambda x: x["at"], reverse=True)
+    return out, scanned
+
+
+VIA_RANK = {"bead": 0, "named": 1, "comment": 2, "cluster": 3}
+STRONG_VIA = ("bead", "named", "comment")      # a window that reaches a row this way counts as evidence for that row
+
+
+def hw_anchor_rows(doc):
+    """{anchor: frozenset of the hardware-row ids that carry it}. A priority row (tier goal) that only reuses a row's
+    anchor adds nothing; an anchor only a priority carries stands for itself."""
+    out = {}
+    for r in doc.get("rows") or []:
+        for a in r.get("anchor") or []:
+            if a:
+                out[a] = out.get(a, frozenset()) | {r["id"]}
+    for r in doc.get("priorities") or []:
+        for a in r.get("anchor") or []:
+            if a and a not in out:
+                out[a] = frozenset({"anchor:" + a})
+    return out
+
+
+def window_links(bead, index, anchors):
+    """{anchor: via} for the hardware-row anchors a window's bead reaches, strongest first-class wins:
+    bead    the anchor is the bead or an ancestor of it (parent chain or dotted id);
+    named   the bead's own text declares the anchor, or a bead under it, as its target row (declared_targets), and it
+            declares one row only: a bead that declares several rows is a roll-up and does not say which one this
+            window tested, so those drop to the cluster tier;
+    cluster an ancestor cluster bead lists the anchor or a bead under it under '## Rows' (the lane that owns the rows).
+    (comment, a fourth tier between named and cluster, comes from the row's own anchor comments: comment_links.)
+    bead, named and comment are evidence a window ran for that row; cluster says only that a lane owning the row ran a window.
+    anchors: {anchor: row-id set} (hw_anchor_rows) or a plain set of anchors."""
+    links = {}
+
+    def group(a):
+        return anchors[a] if isinstance(anchors, dict) else frozenset({a})
+
+    def put(a, via):
+        if a in anchors and VIA_RANK[via] < VIA_RANK.get(links.get(a), 9):
+            links[a] = via
+
+    if not bead:
+        return links
+    chain = bead_chain(bead, index)
+    for a in bead_chain(bead, index):
+        put(a, "bead")
+    named = {a for n in (index.get(bead) or {}).get("targets") or [] for a in bead_chain(n, index) if a in anchors}
+    via = "named" if len({group(a) for a in named}) <= 1 else "cluster"
+    for a in named:
+        put(a, via)
+    for c in chain:
+        for n in (index.get(c) or {}).get("cluster_ids") or []:
+            for a in bead_chain(n, index):
+                put(a, "cluster")
+    return links
+
+
+def comment_links(w, comments, anchors):
+    """The anchors whose own bead comments name window w: its 32-hex generation, or a package path in its family
+    (the rule that ties a kit to an anchor, kit_cover.by_refs). The lane that posted the evidence tied the window to the
+    row; nothing new is asked of lanes."""
+    out = set()
+    for a in anchors:
+        refs = (comments.get(a) or {}).get("refs") or {}
+        if w["gen"] in (refs.get("gens") or []) or (
+                w.get("pkg") and any(kit_family_match(p, w["pkg"]) for p in refs.get("paths") or [])):
+            out.add(a)
+    return out
+
+
+def _win_fields(prefix, closed):
+    """The prefix_* fields of a row's latest closed window (+ ok/fail counts) among (window, via) pairs, newest first."""
+    f = {prefix + "_" + k: None for k in ("at", "result", "reason", "generation", "bead", "purpose", "source")}
+    f[prefix + "_ok_n"] = sum(1 for w, _ in closed if w["result"] == "ok")
+    f[prefix + "_fail_n"] = sum(1 for w, _ in closed if w["result"] == "fail")
+    if closed:
+        w = closed[0][0]
+        f.update({prefix + "_at": w["at"], prefix + "_result": w["result"], prefix + "_reason": w["reason"],
+                  prefix + "_generation": w["gen"], prefix + "_bead": w["bead"], prefix + "_purpose": w["purpose"],
+                  prefix + "_source": w["source"]})
+    return f
+
+
+def row_windows(anchors, wins):
+    """The row-side view of linked windows (newest first) -> the window_* fields, the lane_window_* fields and the open
+    windows as kits. window_* = the latest closed window that reached the row by bead/named (evidence for the row);
+    lane_window_* = the latest closed window that reached it by cluster only (a lane that owns the row ran it; the
+    window may never have touched this row). Neither changes the row's state."""
+    mine = []
+    for w in wins:
+        vias = [w["links"][a] for a in anchors if a in w.get("links", {})]
+        if vias:
+            mine.append((w, min(vias, key=VIA_RANK.get)))
+    done = lambda pairs: [(w, v) for w, v in pairs if w["result"] in ("ok", "fail")]
+    strong = done([(w, v) for w, v in mine if v in STRONG_VIA])
+    lane = done([(w, v) for w, v in mine if v not in STRONG_VIA])
+    f = _win_fields("window", strong)
+    f["window_via"] = strong[0][1] if strong else None
+    f.update(_win_fields("lane_window", lane))
+    f["windows"] = [{"gen": w["gen"], "at": w["at"], "result": w["result"], "bead": w["bead"], "via": v,
+                     "purpose": w["purpose"]} for w, v in mine[:HW_WINDOWS_ROW_SHOW]]
+    kits = [{"lane": w["lane"] or "?", "gen": w["gen"], "label": w["purpose"] or "", "position": None, "active": True,
+             "pkg": w["pkg"] or "", "bead": w["bead"], "via": v} for w, v in mine if w["result"] == "open"]
+    return f, kits
+
+
+def collect_bench_queue(sent, lanes):
+    """Each lane's newest request to BENCH in the window and the first BENCH relay back to that lane after it."""
+    w = g16_watch()
+    cutoff = NOW.timestamp() - BENCH_QUEUE_WINDOW_H * 3600
+    active = {lane_base(l["lane"]): l["lane"] for l in lanes}
+    latest, answers = {}, {}
+    for pair, v in (sent or {}).items():
+        if not isinstance(v, dict):
+            continue
+        target, _, sha = pair.partition(" ")
+        src, f = str(v.get("from") or ""), str(v.get("file") or "")
+        ts = parse_ts(v.get("at"))
+        t = ts.timestamp() if ts else 0
+        if lane_base(target) == "BENCH" and lane_base(src) != "BENCH" and w.BENCH_REQUEST_FILE_RE.search(os.path.basename(f)):
+            if t >= cutoff and t > latest.get(lane_base(src), {}).get("t", 0):
+                latest[lane_base(src)] = {"t": t, "from": src, "file": f, "sha256": sha, "at": v.get("at")}
+        elif lane_base(src) == "BENCH" and lane_base(target) != "BENCH":
+            answers.setdefault(lane_base(target), []).append({"t": t, "to": target, "file": f, "at": v.get("at")})
+    rows = []
+    for cl, q in latest.items():
+        after = sorted((a for a in answers.get(cl, []) if a["t"] > q["t"]), key=lambda a: a["t"])
+        a = after[0] if after else None
+        row = {"cluster": cl, "lane": active.get(cl), "from": q["from"], "request": q["file"],
+               "request_file": os.path.basename(q["file"]), "request_sha256": q["sha256"], "relayed_at": q["at"],
+               "age_s": age_s(parse_ts(q["at"])), "answered": bool(a), "answers_after": len(after),
+               "answer": None}
+        if a:
+            ans = {"to": a["to"], "file": a["file"], "at": a["at"], "state": None, "reason": None, "typed_cause": None}
+            fb = os.path.basename(a["file"])
+            if typed_result_name(fb):
+                try:
+                    tr = read_typed(a["file"], os.path.getmtime(a["file"]))
+                    ans.update(state=tr["state"], reason=tr["reason"], typed_cause=tr["typed_cause"])
+                except OSError:
+                    pass
+            row["answer"] = ans
+        rows.append(row)
+    rows.sort(key=lambda r: (r["answered"], -(parse_ts(r["relayed_at"]) or NOW).timestamp()))
+    return rows
+
+
+def collect_bench(lanes):
+    dev = {"bench": None, "runner": collect_runner(), "windows": [], "windows_open": [], "queue": [],
+           "results": None, "reported": {}, "boundary": None, "sent_error": None}
+    bench = next((l for l in lanes if lane_base(l["lane"]) == "BENCH"), None)
+    if bench:
+        dev["bench"] = {k: bench.get(k) for k in ("lane", "run", "home", "bead", "run_state", "state", "cls",
+                                                    "cls_reason", "last_status", "status_age_s", "messages_pending",
+                                                    "messages_total", "native_activity_age_s", "stale_quota",
+                                                    "blocker_error")}
+        # runner=/dut=/place= are not on every BENCH status line: keep the newest value of each and how many
+        # receipts back it was (any BENCH run: the lane rotates runs, the bench does not)
+        found, _mt, _last = g16_receipts(bench["lane"], None, limit=BENCH_KV_RECEIPTS)
+        for back, (rec, line) in enumerate(found):
+            for k in BENCH_KV_KEYS:
+                if line and k not in dev["reported"] and line["kv"].get(k):
+                    dev["reported"][k] = {"value": line["kv"][k], "receipt": rec, "receipts_back": back}
+    try:
+        with open(os.path.join(G16_RUNS, "relay-sent.json")) as f:
+            sent = json.load(f)
+        if not isinstance(sent, dict):
+            raise ValueError("relay-sent.json is not a JSON object")
+    except Exception as ex:
+        sent = {}
+        dev["sent_error"] = str(ex)[:200]
+        err("relay-sent.json", ex)
+    dev["queue"] = collect_bench_queue(sent, lanes) if sent else []
+    wins = collect_windows()
+    dev["windows_open"] = [w for w in wins if w["open"]]
+    dev["windows"], dev["windows_total"] = wins[:WINDOWS_SHOW], len(wins)
+    dev["results"] = collect_typed_results(sent)
+    dev["boundary"] = next(({**it["boundary"], "at": it["at"], "file": it["file"]}
+                            for it in dev["results"]["items"] if it.get("boundary")), None)
+    return dev
+
+
+# --------------------------------------------------------------- owner asks --
+# 2026-11-02 (tsp-mc9m.60.29.84.14): owner asks come from the owner intake (pf-owner-intake.sh list --id <id>, the
+# durable owner bridge), not gpu14-owner-questions.md (Q60-Q68 there were stale). Only non-resolved tickets show.
+OWNER_INTAKE = os.environ.get("FB_OWNER_INTAKE") or os.path.join(MC, "scripts", "pf-owner-intake.sh")
+OWNER_INTAKE_IDS = [i for i in (os.environ.get("FB_OWNER_INTAKE_IDS") or "gpu-16").split(",") if i.strip()]
+OWNER_INTAKE_TIMEOUT_S = 90
+INTAKE_ROW_RE = re.compile(r"^(\S+)\tstatus=(\S*)\tround=(\S*)\tbead=(\S*)\s*$")
+
+
+def collect_owner_asks(index=None):
+    out = {"count": 0, "items": [], "error": None, "source": "pf-owner-intake.sh list", "ids": OWNER_INTAKE_IDS,
+           "listed": 0, "resolved": 0}
+    errs = []
+    for ident in OWNER_INTAKE_IDS:
+        rc, txt, e = run_cmd([OWNER_INTAKE, "list", "--id", ident.strip()], OWNER_INTAKE_TIMEOUT_S, cwd=MC)
+        if rc != 0:
+            errs.append(f"{ident}: rc={rc} {(e.strip().splitlines() or [''])[-1][:160]}")
+            continue
+        for line in txt.splitlines():
+            m = INTAKE_ROW_RE.match(line)
+            if not m:
+                continue    # "pf-ask-owner: no tickets for <id>"
+            out["listed"] += 1
+            if m.group(2) == "resolved":
+                out["resolved"] += 1
+                continue
+            bead = m.group(4) or None
+            out["items"].append({"num": None, "ticket": m.group(1), "status": m.group(2), "round": m.group(3),
+                                 "bead": bead, "id": ident.strip(),
+                                 "title": ((index or {}).get(bead) or {}).get("title") if bead else None})
+    if errs:
+        out["error"] = "; ".join(errs)[:400]
+        err("owner intake", out["error"])
+    out["count"] = len(out["items"])
+    return out
 
 
 # ---------------------------------------------------------------------- PRs --
@@ -715,464 +1518,6 @@ def collect_prs(refs):
     return prs
 
 
-# ------------------------------------------------------------------- device --
-DQ_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (.*)$")
-
-
-def collect_device():
-    dev = {"runner_alive": False, "kit_running": False, "kit_proc": None, "halted": False, "halt_line": None,
-           "running": None, "next": [], "pending_count": 0, "held_count": 0, "done_count": 0,
-           "results": [], "events": [], "last_line": None, "log_mtime": None}
-    rc, txt, e = run_cmd(["ps", "-eo", "pid,etimes,args"], 20)
-    if rc == 0:
-        for ln in txt.splitlines():
-            if re.search(r"\sbash\s+\S*queue-runner\.sh(\s|$)", ln) and "grep" not in ln:
-                dev["runner_alive"] = True
-            m = re.search(r"\sbash\s+(?:/home/matt/recovery/\S*/kits/\S*/|\./)direct-boot\.sh\s+(\S+)(.*)$", ln)
-            if m and "--offline-only" not in ln and " --check" not in ln:
-                dev["kit_running"] = True
-                dev["kit_proc"] = (m.group(1) + m.group(2))[:200]
-    done = set()
-    try:
-        with open(os.path.join(G, "queue.done")) as f:
-            done = {l.strip() for l in f if l.strip()}
-    except Exception as ex:
-        err("queue.done", ex)
-    dev["done_count"] = len(done)
-    try:
-        pos = 0
-        with open(os.path.join(G, "queue.tsv")) as f:
-            for raw in f:
-                line = raw.rstrip("\n")
-                if not line.strip():
-                    continue
-                cols = line.split("\t")
-                if line.startswith("#"):
-                    if len(cols) >= 6:
-                        dev["held_count"] += 1
-                        # 2026-10-11: a retired/failed row's kit is consumed, not BOOT_READY (wavea/reseal sat 18-50 h as boot_ready)
-                        if cols[3] not in ("", "-"):
-                            dev.setdefault("done_rows", {}).setdefault(cols[3], cols[0].lstrip("#"))
-                    continue
-                if len(cols) < 6:
-                    continue
-                name, typ, path, sha, mf, prefix = cols[:6]
-                args = cols[6] if len(cols) > 6 else ""
-                if name in done:
-                    if sha not in ("", "-"):
-                        dev.setdefault("done_rows", {})[sha] = name
-                    continue
-                pos += 1
-                dev["pending_count"] = pos
-                if len(dev["next"]) < NEXT_SHOW:
-                    dev["next"].append({"name": name, "type": typ, "path": path, "sha": sha, "manifest": mf,
-                                        "args": args, "position": pos})
-                dev.setdefault("pending_all", []).append({"name": name, "type": typ, "sha": sha, "path": path})
-    except Exception as ex:
-        err("queue.tsv", ex)
-    events = []
-    try:
-        p = os.path.join(G, "device-queue.txt")
-        dev["log_mtime"] = iso(os.path.getmtime(p))
-        with open(p, errors="replace") as f:
-            lines = f.read().splitlines()
-        dev["last_line"] = lines[-1][:300] if lines else None
-        for ln in lines:
-            m = DQ_RE.match(ln)
-            if not m:
-                continue
-            ts, rest = m.group(1), m.group(2)
-            ev = {"ts": ts, "text": rest[:400]}
-            if rest.startswith("QUEUE empty"):
-                ev.update(kind="empty")
-            elif rest.startswith("HALT "):
-                ev.update(kind="halt")
-                m2 = re.match(r"HALT (?:after|before) (\S+?):?\s", rest)
-                ev["name"] = m2.group(1) if m2 else None
-            elif rest.startswith("SKIP "):
-                ev.update(kind="skip")
-                m2 = re.match(r"SKIP (\S+?):", rest)
-                ev["name"] = m2.group(1) if m2 else None
-            elif rest.startswith("CHAIN_WARN "):
-                ev.update(kind="chain_warn")
-                m2 = re.search(r"name=(\S+)", rest)
-                ev["name"] = m2.group(1) if m2 else None
-            else:
-                m2 = re.match(r"(\S+) (START|RESULT|rc=|result\.json|no run\.log|\d{4}-\d\d-\d\dT\S+ RESULT)(.*)$", rest)
-                if not m2:
-                    ev.update(kind="note")
-                    events.append(ev)
-                    continue
-                name, what, tail = m2.group(1), m2.group(2), m2.group(3)
-                ev["name"] = name
-                if what == "START":
-                    ev.update(kind="start")
-                    r = re.search(r"R=(\S+)", tail) or re.search(r"log=(\S+)", tail)
-                    ev["receipt"] = r.group(1) if r else None
-                else:
-                    ev.update(kind="result")
-                    body = (what + tail)
-                    v = re.search(r"verdict=(\S+)", body)
-                    rcm = re.match(r"rc=(\d+)", body)
-                    om = re.search(r'"Outcome":"(\w+)"', body) or re.search(r'"Error":"(\w+)"', body)
-                    stg = re.search(r"stage=(\S+)", body)
-                    rsn = re.search(r"reason=(\S+)", body)
-                    if v:
-                        ev["verdict"] = v.group(1)
-                    elif rcm:
-                        ev["verdict"] = "rc=" + rcm.group(1)
-                    elif om:
-                        ev["verdict"] = om.group(1)
-                    elif "no run.log" in body:
-                        ev["verdict"] = "no-result"
-                    else:
-                        ev["verdict"] = "?"
-                    ev["stage"] = stg.group(1) if stg else None
-                    ev["detail"] = (("reason=" + rsn.group(1) + " ") if rsn else "") + body[:200]
-                    vv = ev["verdict"].lower()
-                    if vv in ("pass", "rc=0") or vv.endswith("-collected") or vv == "ok":
-                        ev["cls"] = "good"
-                    elif vv in ("na", "n/a", "no-result", "?"):
-                        ev["cls"] = "neutral"
-                    elif vv in ("stop", "blocked") or vv.startswith("rc="):
-                        ev["cls"] = "warning"
-                    else:
-                        ev["cls"] = "critical"
-            events.append(ev)
-    except Exception as ex:
-        err("device-queue.txt", ex)
-    dev["events"] = events[-40:]
-    # running now = last START with no later terminal/skip event for the same name
-    last_start = None
-    for i in range(len(events) - 1, -1, -1):
-        if events[i]["kind"] == "start":
-            last_start = (i, events[i])
-            break
-    if last_start:
-        i, s = last_start
-        finished = any(e.get("name") == s["name"] and e["kind"] in ("result", "skip", "halt") for e in events[i + 1:])
-        if not finished:
-            st = parse_ts(s["ts"])
-            dev["running"] = {"name": s["name"], "started_at": s["ts"], "elapsed_s": age_s(st),
-                              "receipt": s.get("receipt")}
-    # 2026-10-13: a kit-resume series holds the DUT between rows but logs no START line, so the board said
-    # device_running=- during Build 9 acceptance. kit-resume.active is the runner's own marker for an open series.
-    if not dev.get("running"):
-        try:
-            with open(os.path.join(G, "kit-resume.active")) as f:
-                active = json.load(f)
-            anchor = active.get("Anchor") or ""
-            series = os.path.basename(os.path.dirname(os.path.dirname(anchor))) or "kit-resume series"
-            st_m = os.path.getmtime(os.path.join(G, "kit-resume.active"))
-            dev["running"] = {"name": f"kit-resume {series}", "started_at": iso(st_m),
-                              "elapsed_s": NOW.timestamp() - st_m, "receipt": os.path.dirname(anchor) or None}
-        except FileNotFoundError:
-            pass
-        except Exception as ex:  # a malformed marker is itself worth surfacing
-            err("kit-resume.active", ex)
-    # 2026-10-13: the first live window (glcrash) booted with the board saying device_running=-. A live window lives in
-    # the pf-kit-window-runner root: boot-open-<gen>.json while activating, <gen>/runner.json once open.
-    if not dev.get("running"):
-        wroot = os.path.expanduser("~/.local/state/pocketforge/kit-windows")
-        try:
-            for name in sorted(os.listdir(wroot)):
-                m = re.fullmatch(r"boot-open-([0-9a-f]{32})\.json", name)
-                if not m:
-                    continue
-                gen = m.group(1)
-                rj = os.path.join(wroot, gen, "runner.json")
-                state = "activating"
-                if os.path.exists(rj):
-                    with open(rj) as f:
-                        state = str(json.load(f).get("State") or "unknown")
-                if state in ("closed", "revoked"):
-                    continue
-                # 2026-10-13 18:06Z: a FAILED boot-open (boot-open-<gen>.failed.json, no runner.json) showed as
-                # "activating" forever, and because the loop runs in name order it hid the real open window (4182dcde
-                # sorted after 27b50af6). A failed boot-open is not running; an open window wins over anything else.
-                if state == "activating" and os.path.exists(os.path.join(wroot, f"boot-open-{gen}.failed.json")):
-                    continue
-                if dev.get("running") and "(open)" in dev["running"]["name"] and state != "open":
-                    continue
-                # 2026-10-13: gen 38f5cccd's session closed (terminal.json CLOSED) but the runner never finalized and
-                # runner.json still said open; show that instead of a live window.
-                try:
-                    with open(os.path.join(wroot, gen, "active.json")) as f:
-                        anc = json.load(f).get("AnchorPath") or ""
-                    if anc and os.path.exists(os.path.join(os.path.dirname(anc), "terminal.json")):
-                        state = "session CLOSED, runner not finalized: disposition WAIT"
-                except FileNotFoundError:
-                    pass
-                st_m = os.path.getmtime(os.path.join(wroot, name))
-                dev["running"] = {"name": f"live window {gen[:8]} ({state})", "started_at": iso(st_m),
-                                  "elapsed_s": NOW.timestamp() - st_m, "receipt": os.path.join(wroot, gen)}
-        except FileNotFoundError:
-            pass
-        except Exception as ex:
-            err("kit-windows", ex)
-    # halted = a HALT with no later START or QUEUE empty. 2026-10-13: after a verified bench, the restarted runner
-    # printed "QUEUE empty" on an empty queue, but the board kept saying HALTED (no START ever follows on an empty queue).
-    last_halt = max((i for i, e in enumerate(events) if e["kind"] == "halt"), default=None)
-    if last_halt is not None:
-        later_start = any(e["kind"] in ("start", "empty") for e in events[last_halt + 1:])
-        if not later_start and not dev["runner_alive"]:
-            dev["halted"] = True
-            dev["halt_line"] = events[last_halt]["text"]
-            dev["halt_at"] = events[last_halt]["ts"]
-    cutoff = NOW - dt.timedelta(hours=RESULTS_WINDOW_H)
-    res = [e for e in events if e["kind"] in ("result", "halt", "skip")]
-    recent = [e for e in res if (parse_ts(e["ts"]) or NOW) >= cutoff]
-    dev["results"] = (recent if len(recent) >= RESULTS_SHOW else res)[-RESULTS_SHOW:][::-1]
-    dev["window_queue"], dev["wq_by_gen"] = collect_window_queue()
-    return dev
-
-
-# ------------------------------------------------------------- window queue --
-# 2026-10-19: since 10-16 (D4a) the live bench queue is window-queue.sh over fleet-board/window-queue.tsv, but the board
-# read only the retired kits queue (queue.tsv): the bench tile said "0 queued" with rows queued, and lanes whose kit was
-# queued, HELD or already consumed were flagged boot_ready. Formats are window-queue.sh's own (Q, ACTIVE, DONE, FAILED,
-# PAUSE, MARK, RL there):
-#   window-queue.tsv        ts lane owner TOKEN pkg gen steps label note; first non-comment row is next. '#' rows are
-#                           comments; gpu-14 holds a row as `# HELD <why>` (or `# PARKED <why>`) + the original columns,
-#                           and withdraws one as `#withdrawn-<who>-<ts> <why>` + the original columns.
-#   window-queue.done.tsv   ts gen owner lane label outcome pkg (finish)
-#   window-queue.failed.tsv ts kind reason + the popped 9-column row, so gen is column 9 (fail_row)
-#   window-queue.active     key=value lines: gen owner lane token pkg label phase since
-#   window-queue.pause      present = paused (the STOP line)
-#   window-done/<gen>       success|failure<TAB>ts<TAB>source (the --done marker)
-#   .window-queue.run.lock  flock held by the running loop for its whole life (running())
-WQ_BOARD = os.environ.get("WQ_BOARD") or BOARD
-KIT_WINDOWS = os.environ.get("PF_KIT_WINDOWS_DIR") or os.path.expanduser("~/.local/state/pocketforge/kit-windows")
-WQ_SHOW = 15                    # pending / held window-queue rows listed
-WQ_RECENT_SHOW = 8              # done / failed window-queue rows listed
-WQ_GEN_RE = re.compile(r"^[0-9a-f]{32}$")
-WQ_HOLD_RE = re.compile(r"^#\s*(HELD|PARKED)\b[\s:]*(.*)$")
-WQ_WITHDRAWN_RE = re.compile(r"^#\s*withdrawn-(\S+)\s*(.*)$", re.I)
-WQ_TAIL_TS_RE = re.compile(r"[\s:#]*\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\s*$")   # the row's own ts, kept after the prefix
-WQ_LEAD_TS_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?Z)\s*")
-
-
-def wq_running(lock_path):
-    """window-queue.sh running(): the loop holds an flock on .window-queue.run.lock, so `flock -n` fails while it runs.
-    Answer the same question by reading /proc/locks for a granted FLOCK on that inode: a pure read that never takes the
-    lock, so a refresh can never make a starting loop exit already_running. Without /proc/locks, fall back to the
-    same non-blocking probe --status uses. Returns (running, method)."""
-    try:
-        s = os.stat(lock_path)
-    except FileNotFoundError:
-        return False, "no_lock_file"
-    want = (os.major(s.st_dev), os.minor(s.st_dev), s.st_ino)
-    try:
-        with open("/proc/locks") as f:
-            for ln in f:
-                p = ln.split()
-                if len(p) < 6 or p[1] != "FLOCK":   # "N: -> FLOCK ..." is a blocked waiter, not a holder
-                    continue
-                mm = p[5].split(":")
-                try:
-                    if (int(mm[0], 16), int(mm[1], 16), int(mm[2])) == want:
-                        return True, "proc_locks"
-                except (ValueError, IndexError):
-                    continue
-        return False, "proc_locks"
-    except OSError:
-        pass
-    import fcntl
-    fd = os.open(lock_path, os.O_WRONLY | os.O_APPEND)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        return True, "flock_probe"
-    finally:
-        os.close(fd)   # closing the only fd releases a probe lock we did take
-    return False, "flock_probe"
-
-
-def collect_window_queue():
-    """Return (window_queue summary for data.json, {gen: disposition}). A disposition is
-    {state: active|pending|held|consumed, text, ...}; precedence active > pending > held > done/failed/marker > withdrawn."""
-    fb = WQ_BOARD
-    wq = {"path": os.path.join(fb, "window-queue.tsv"), "running": None, "running_via": None, "paused": False,
-          "pause_line": None, "pause_at": None, "depth": 0, "held_count": 0, "withdrawn_count": 0, "active": None,
-          "pending": [], "held": [], "done_count": 0, "failed_count": 0, "recent": []}
-    by_gen = {}
-    try:
-        wq["running"], wq["running_via"] = wq_running(os.path.join(fb, ".window-queue.run.lock"))
-    except Exception as ex:
-        err("window-queue run lock", ex)
-    pp = os.path.join(fb, "window-queue.pause")
-    if os.path.isfile(pp):
-        wq["paused"] = True
-        try:
-            wq["pause_at"] = iso(os.path.getmtime(pp))
-            with open(pp, errors="replace") as f:
-                wq["pause_line"] = f.read(200).strip()
-        except OSError as ex:
-            err("window-queue.pause", ex)
-    try:
-        kv = {}
-        with open(os.path.join(fb, "window-queue.active"), errors="replace") as f:
-            for l in f:
-                k, sep, v = l.rstrip("\n").partition("=")
-                if sep and k not in kv:
-                    kv[k] = v
-        if kv.get("gen"):   # --status: sed -n 's/^gen=//p' | head -1
-            wq["active"] = {k: kv.get(k) for k in ("gen", "lane", "owner", "label", "phase", "since", "pkg")}
-    except FileNotFoundError:
-        pass
-    except Exception as ex:
-        err("window-queue.active", ex)
-    # done / failed / markers: every outcome a generation has had, oldest first
-    outcomes = collections.defaultdict(list)
-    recent = []
-    for fn, src in (("window-queue.done.tsv", "done"), ("window-queue.failed.tsv", "failed")):
-        try:
-            with open(os.path.join(fb, fn), errors="replace") as f:
-                for raw in f:
-                    line = raw.rstrip("\n")
-                    if not line:
-                        continue
-                    wq[src + "_count"] += 1          # --status counts failed rows with grep -c .
-                    c = line.split("\t")
-                    if src == "done" and len(c) >= 6:
-                        g, oc, lane, label = c[1], c[5], c[3], c[4]
-                    elif src == "failed" and len(c) >= 9:
-                        g, oc = c[8], f"failed {c[1]}" + (f" {c[2]}" if c[2] else "")
-                        lane, label = c[4], (c[10] if len(c) > 10 else "")
-                    else:
-                        continue
-                    oc = re.sub(r"\s*gen=[0-9a-f]{32}", "", oc)
-                    outcomes[g].append((c[0], oc[:160]))
-                    recent.append({"ts": c[0], "gen": g, "lane": lane, "label": label, "outcome": oc[:200], "src": src})
-        except FileNotFoundError:
-            pass
-        except Exception as ex:
-            err(fn, ex)
-    wq["recent"] = sorted(recent, key=lambda r: r["ts"], reverse=True)[:WQ_RECENT_SHOW]
-    for g, ocs in outcomes.items():
-        if WQ_GEN_RE.match(g):
-            by_gen[g] = {"state": "consumed", "outcome": "; ".join(o for _t, o in sorted(ocs)[-3:]), "src": "window-queue"}
-    try:
-        md = os.path.join(fb, "window-done")
-        for g in os.listdir(md):
-            if WQ_GEN_RE.match(g) and g not in by_gen:
-                with open(os.path.join(md, g), errors="replace") as f:
-                    m = f.readline().split("\t")
-                by_gen[g] = {"state": "consumed", "outcome": f"window-done marker {m[0].strip() or '?'}"
-                             + (f" ({m[2].strip()})" if len(m) > 2 and m[2].strip() else ""), "src": "window-done"}
-    except FileNotFoundError:
-        pass
-    except Exception as ex:
-        err("window-done markers", ex)
-    # the queue file: pending rows (position = order among non-comment rows, as head_row/--status count them)
-    held_gens = {}
-    try:
-        with open(wq["path"], errors="replace") as f:
-            for raw in f:
-                line = raw.rstrip("\n")
-                if not line.strip():
-                    continue
-                c = line.split("\t")
-                row = {"ts": c[0], "lane": c[1] if len(c) > 1 else "", "run": c[2] if len(c) > 2 else "",
-                       "token": c[3] if len(c) > 3 else "", "pkg": c[4] if len(c) > 4 else "",
-                       "gen": c[5] if len(c) > 5 else "", "steps": c[6] if len(c) > 6 else "",
-                       "label": c[7] if len(c) > 7 else "", "note": (c[8] if len(c) > 8 else "")[:200]}
-                if line.lstrip().startswith("#"):
-                    if not WQ_GEN_RE.match(row["gen"]):
-                        continue                     # header or a free comment
-                    head = c[0].strip()
-                    mh, mw = WQ_HOLD_RE.match(head), WQ_WITHDRAWN_RE.match(head)
-                    if mw:
-                        why = WQ_TAIL_TS_RE.sub("", mw.group(2)).strip() or "withdrawn"
-                        wq["withdrawn_count"] += 1
-                        by_gen.setdefault(row["gen"], {"state": "consumed", "outcome": f"withdrawn ({mw.group(1)}): {why[:120]}",
-                                                       "src": "window-queue"})
-                        continue
-                    why = WQ_TAIL_TS_RE.sub("", mh.group(2) if mh else head.lstrip("#")).strip()
-                    lm = WQ_LEAD_TS_RE.match(why)
-                    row.update(ts=None, hold=(mh.group(1) if mh else "commented"), held_at=lm.group(1) if lm else None,
-                               reason=((why[lm.end():] if lm else why).strip() or (mh.group(1) if mh else "commented"))[:300])
-                    tm = WQ_TAIL_TS_RE.search(head)
-                    row["ts"] = tm.group(0).strip(" :#") if tm else None
-                    wq["held_count"] += 1
-                    if len(wq["held"]) < WQ_SHOW:
-                        wq["held"].append(row)
-                    held_gens[row["gen"]] = row
-                    continue
-                wq["depth"] += 1
-                row["position"] = wq["depth"]
-                if len(wq["pending"]) < WQ_SHOW:
-                    wq["pending"].append(row)
-                if WQ_GEN_RE.match(row["gen"]):
-                    by_gen[row["gen"]] = {"state": "pending", "position": row["position"], "label": row["label"],
-                                          "src": "window-queue"}
-    except FileNotFoundError:
-        pass
-    except Exception as ex:
-        err("window-queue.tsv", ex)
-    for g, row in held_gens.items():
-        if (by_gen.get(g) or {}).get("state") != "pending":
-            by_gen[g] = {"state": "held", "hold": row["hold"], "reason": row["reason"], "held_at": row["held_at"],
-                         "src": "window-queue"}
-    a = wq["active"]
-    if a and WQ_GEN_RE.match(a["gen"] or ""):
-        by_gen[a["gen"]] = {"state": "active", "phase": a.get("phase"), "since": a.get("since"), "src": "window-queue"}
-    # display text, once the depth and the loop state are known
-    loop = " (queue PAUSED)" if wq["paused"] else (" (queue loop NOT running)" if wq["running"] is False else "")
-    for g, d in by_gen.items():
-        if d["state"] == "pending":
-            d["text"] = f"queued #{d['position']} of {wq['depth']} in the window queue (gen {g[:8]}){loop}"
-        elif d["state"] == "held":
-            d["text"] = f"{'held' if d['hold'] == 'HELD' else d['hold'].lower()}: {d['reason'][:180]}"
-        elif d["state"] == "active":
-            d["text"] = f"window-queue active item: gen {g[:8]} phase={d.get('phase') or '?'} since {d.get('since') or '?'}"
-        else:
-            d["text"] = f"consumed: {d['outcome'][:200]}"
-    return wq, by_gen
-
-
-def kit_window_disposition(gen):
-    """A gen the window queue never saw but pf-kit-window-runner did: consumed (window-queue.sh --add refuses it as
-    generation_consumed). None when the runner has no trace of it."""
-    try:
-        rj = os.path.join(KIT_WINDOWS, gen, "runner.json")
-        if os.path.exists(rj):
-            with open(rj) as f:
-                state = str(json.load(f).get("State") or "unknown")
-        elif os.path.exists(os.path.join(KIT_WINDOWS, f"boot-open-{gen}.failed.json")):
-            state = "boot-open failed"
-        elif os.path.exists(os.path.join(KIT_WINDOWS, f"boot-open-{gen}.json")) or os.path.isdir(os.path.join(KIT_WINDOWS, gen)):
-            state = "boot-open started"
-        else:
-            return None
-    except Exception as ex:
-        err(f"kit-windows {gen[:8]}", ex)
-        return None
-    return {"state": "consumed", "outcome": f"kit window {state} (outside the window queue)", "src": "kit-windows",
-            "text": f"consumed: kit window {state} (outside the window queue)"}
-
-
-# --------------------------------------------------------------- owner asks --
-def collect_owner_asks():
-    out = {"count": 0, "items": [], "error": None}
-    try:
-        txt = open(OWNER_ASKS, errors="replace").read()
-    except Exception as ex:
-        out["error"] = str(ex)
-        err("owner questions", ex)
-        return out
-    m = re.search(r"^## Needs you\s*$(.*?)(?=^## |\Z)", txt, re.S | re.M)
-    sec = m.group(1) if m else ""
-    # 2026-10-19 (gpu-14): the file lists asks as "- **Q57 (...): title**" bullets as well as
-    # "1. **title**" numbered lines; matching only the numbered form showed 0 live asks while Q53-Q57 were open.
-    for n, im in enumerate(re.finditer(r"^(?:(\d+)\.|-)\s+\*\*(.+?)\*\*", sec, re.M), 1):
-        q = re.match(r"Q(\d+)\b", im.group(2))
-        num = int(im.group(1) or (q.group(1) if q else n))
-        out["items"].append({"num": num, "title": im.group(2).strip()[:200]})
-    out["count"] = len(out["items"])
-    return out
-
-
 # ------------------------------------------------------------ classification --
 def fmt_age(s):
     if s is None:
@@ -1193,12 +1538,12 @@ def fmt_age(s):
 #   until_event=ticket:<bead>         holds until that bead changes (updated or closed after the park)
 #   evidence_for=<who>[:<bead>]       an "Evidence kept" row, not a need, until <bead> closes (no bead: PARK_MAX_H)
 # A malformed token, or one whose source cannot be read, keeps PARK_MAX_H resurfacing: a bad park never hides a stall.
-PARK_TOKEN_RE = re.compile(r"(?<![\w-])(until_date|until_owner|until_event|evidence_for)=(\S*)")
+PARK_TOKEN_RE = re.compile(r"(?<![\w-])(until_bead|until_pr|until_date|until_owner|until_event|evidence_for)=(\S*)")
 OWNER_DONE_RE = re.compile(r"\b(RESOLVED|ANSWERED)\b")
 PARK_ID_RE = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
 
 
-def park_condition(reason, since, index, owner, lanes_by_name):
+def park_condition(reason, since, index, owner, lanes_by_name, prs=None):
     """Typed wake tokens in a parked.tsv reason -> None (no typed token) or
     {"state": hold|fire|evidence|fallback, "text": why, "evidence": {who, bead}|None}."""
     toks = PARK_TOKEN_RE.findall(reason or "")
@@ -1209,7 +1554,31 @@ def park_condition(reason, since, index, owner, lanes_by_name):
     for key, raw in toks:
         val = raw.rstrip(".,;:)")
         tok = f"{key}={val}"
-        if key == "until_date":
+        if key == "until_bead":
+            if not re.fullmatch(PARK_ID_RE, val):
+                bad.append(f"{tok} is not a bead id")
+            else:
+                bead = index.get(val) if index else None
+                if bead is None:
+                    bad.append(f"{tok}: {'bead index unreadable' if not index else 'unknown bead'}")
+                elif bead.get("status") == "closed":
+                    fires.append(f"{val} is closed")
+                else:
+                    holds.append(f"until {val} closes ({bead.get('status')})")
+        elif key == "until_pr":
+            if not PR_RE.fullmatch(val):
+                bad.append(f"{tok} is not <owner>/<repo>#<n>")
+            else:
+                pr = (prs or {}).get(val)
+                if pr is None:
+                    bad.append(f"{tok}: PR state unreadable")
+                elif pr.get("state") in ("MERGED", "CLOSED"):
+                    fires.append(f"{val} is {pr.get('state')}")
+                elif pr.get("state") == "OPEN":
+                    holds.append(f"until {val} merges")
+                else:
+                    bad.append(f"{tok}: unknown PR state {pr.get('state')}")
+        elif key == "until_date":
             d = parse_ts(val) if re.match(r"\d{4}-\d\d-\d\d", val) else None
             if d is None:
                 bad.append(f"{tok} is not a UTC ISO time")
@@ -1284,293 +1653,23 @@ def park_condition(reason, since, index, owner, lanes_by_name):
     return {"state": "hold", "text": "; ".join(holds), "evidence": None, "release": False}
 
 
-def classify_lanes(lanes, prs, index, dev, owner=None):
-    """Set cls/kind/cls_reason/next on each lane; return needs items. owner: collect_owner_asks() (until_owner=)."""
-    lanes_by_name = {ln["lane"]: ln for ln in lanes}
-    needs = []
-    pending_by_sha = {}
-    for p in dev.get("pending_all") or []:
-        pending_by_sha[p["sha"]] = p
-    results_by_name = {}
-    for e in dev.get("events") or []:
-        if e["kind"] == "result":
-            results_by_name[e.get("name")] = e
-    running_name = (dev.get("running") or {}).get("name")
+def wait_condition(bid, index, owner, lanes_by_name, prs):
+    """Resolve the freshest matching waits.tsv row, including descendant wildcards.
 
-    done_rows = dev.get("done_rows") or {}
-    wq_by_gen = dev.get("wq_by_gen") or {}
-
-    def wq_disposition(gen):
-        """2026-10-19: a BOOT_READY gen -> its window-queue disposition (collect_window_queue), else a kit-window
-        trace, else None (nothing knows the kit: today's boot_ready need stands)."""
-        if not gen:
-            return None
-        return wq_by_gen.get(gen) or kit_window_disposition(gen)
-
-    def kit_match(text):
-        """A BOOT_READY/HANDBACK reason naming a kit manifest sha -> queue disposition.
-        ('pending', name, position) | ('running', name, None) | ('done', name, verdict) | None"""
-        # 2026-10-11: also accept unique >=8-hex prefixes (reasons often cite `manifest_1f466de1`)
-        cands = list(HEX64_RE.findall(text or ""))
-        known = list(pending_by_sha) + list(done_rows)
-        for tok in re.findall(r"(?<![0-9a-f])[0-9a-f]{8,63}(?![0-9a-f])", text or ""):
-            hits = {k for k in known if k.startswith(tok)}
-            if len(hits) == 1:
-                cands.append(hits.pop())
-        for h in cands:
-            if h in pending_by_sha:
-                p = pending_by_sha[h]
-                pos = next((i + 1 for i, q in enumerate(dev["pending_all"]) if q is p), None)
-                return ("pending", p["name"], pos)
-            if h in done_rows:
-                name = done_rows[h]
-                if name == running_name:
-                    return ("running", name, None)
-                ev = results_by_name.get(name)
-                return ("done", name, (ev or {}).get("verdict"))
+    Typed rows are condition-driven and do not expire by age. Untyped rows keep
+    the historical WAIT_MAX_H guard so forgotten bookkeeping resurfaces.
+    """
+    row = wait_for(bid)
+    if not row:
         return None
-
-    for ln in lanes:
-        ri = ln.get("run_info") or {}
-        rs = ri.get("state") if "error" not in ri else None
-        ls = ln["last_status"]
-        st = ls["state"] if ls else None
-        reason = (ls or {}).get("reason") or ""
-        # display text: everything after "state=X" on the status line (reason= tokens are often clipped words)
-        shown = re.sub(r"^[A-Z0-9_]+_STATUS\s+state=\S+\s*", "", (ls or {}).get("raw") or "")[:160]
-        st_ts = parse_ts(ls["ts"]) if ls else parse_ts(ln["last_event_at"])
-        st_age = age_s(st_ts)
-        # 2026-10-19: a BOOT_READY handback names its kit generation; the window queue says whether it is queued,
-        # HELD, active or already consumed, so only a kit nothing knows about stays a boot_ready need.
-        boot_ready_st = st == "BOOT_READY" or (st == "HANDBACK" and reason.upper().startswith("BOOT_READY"))
-        st_gen = (ls or {}).get("gen") if boot_ready_st else None
-        wqd = wq_disposition(st_gen) if st_gen else None
-        ln["window_queue"] = dict({k: wqd.get(k) for k in ("state", "text", "position")}, gen=st_gen) if wqd else None
-        pr = ln.get("pr")
-        pi = prs.get(pr) if pr else None
-        pi = pi if pi and not pi.get("error") else None
-        ln["bead"] = ri.get("task") or (ln.get("adm") or {}).get("task")
-        ln["bead_title"] = (index.get(ln["bead"]) or {}).get("title") if ln["bead"] else None
-        ln["model"] = ri.get("model") or (ln.get("adm") or {}).get("model")
-        ln["provider"] = ri.get("provider") or (ln.get("adm") or {}).get("provider")
-        ln["runtime"] = ri.get("runtime") or (ln.get("adm") or {}).get("runtime")
-        ln["run_state"] = rs or ("?" if "error" in ri or not ri else None)
-        ln["run_error"] = ri.get("error")
-        for k in ("reconciler_alive", "controller_alive", "runtime_alive", "native_activity_age_s",
-                  "messages_total", "worktree", "blocker_error", "last_turn_end", "runtime_parked", "session_id"):
-            ln[k] = ri.get(k)
-        ln["ci_wait"] = ln["ci_waits"][-1] if ln["ci_waits"] else None
-        ln["status_age_s"] = st_age
-        cls, kind, why, nxt = "unknown", None, "", ""
-
-        def need(k, w, n):
-            nonlocal cls, kind, why, nxt
-            cls, kind, why, nxt = "needs", k, w, n
-
-        def wait(w):
-            nonlocal cls, kind, why, nxt
-            cls, kind, why, nxt = "waiting", None, w, ""
-
-        pr_txt = f"{pr}" if pr else ""
-        # 2026-10-11: lanes deliberately waiting on a named event (held kit, dead run superseded by a new one,
-        # an upstream merge) are listed in parked.tsv (run_id<TAB>since_iso<TAB>reason) by gpu-14. A parked lane
-        # shows as waiting; after PARK_MAX_H it comes back as a need so a forgotten park cannot hide a stall.
-        pk = PARKED.get(ln["run"] or "")
-        pk_age = age_s(parse_ts(pk[0])) if pk else None
-        # 2026-10-12: ten Qwen-stuck runs re-surfaced every 12 h although each can only be released once
-        # tsp-mc9m.41.984.49.19 lands. A park reason carrying `until_bead=<id>` holds while that bead is open.
-        pk_bead = re.search(r"until_bead=([A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9])", pk[1]).group(1) if pk and re.search(r"until_bead=([A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9])", pk[1]) else None
-        pk_hold = bool(pk_bead) and (index.get(pk_bead) or {}).get("status") not in (None, "closed")
-        # 2026-10-12: pftfix sat parked 11 h after the PR it waited on (automation#1402) merged; nothing watched it.
-        # A park reason carrying `until_pr=<owner/repo#N>` holds while that PR is open and becomes a need once it merges.
-        pk_pr = re.search(r"until_pr=([\w.-]+/[\w.-]+#\d+)", pk[1]).group(1) if pk and re.search(r"until_pr=([\w.-]+/[\w.-]+#\d+)", pk[1]) else None
-        pk_pri = prs.get(pk_pr) if pk_pr else None
-        pk_cond = park_condition(pk[1], pk[0], index, owner, lanes_by_name) if pk else None
-        pk_bad = f" (wake condition unreadable: {pk_cond['text']})" if pk_cond and pk_cond["state"] == "fallback" else ""
-        if pk and rs != "released" and not ln["driver_alive"] and pk_pri and pk_pri.get("state") in ("MERGED", "CLOSED"):
-            need("unblocked", f"parked until {pk_pr}, which is {pk_pri.get('state')} ({pk_pri.get('merged_at') or ''}): {pk[1]}",
-                 "Resume the lane on the merged change and unpark it (edit parked.tsv).")
-        elif pk and rs != "released" and not ln["driver_alive"] and pk_pr and (pk_pri or {}).get("state") == "OPEN":
-            wait(f"parked until {pk_pr} merges ({fmt_age(pk_age)} ago): {pk[1]}")
-        elif pk and rs != "released" and not ln["driver_alive"] and pk_hold:
-            wait(f"parked until {pk_bead} closes ({fmt_age(pk_age)} ago): {pk[1]}")
-        elif pk and rs != "released" and not ln["driver_alive"] and pk_cond and pk_cond["state"] == "fire":
-            need("unblocked", f"parked ({fmt_age(pk_age)} ago); its wake condition fired: {pk_cond['text']}: {pk[1]}",
-                 "The evidence is no longer needed: release the run (release-run.sh) and drop its parked.tsv row."
-                 if pk_cond["release"] else "Act on the event, then resume the lane or re-park it with a new condition (edit parked.tsv).")
-        elif pk and rs != "released" and not ln["driver_alive"] and pk_cond and pk_cond["state"] == "evidence" \
-                and (pk_cond["evidence"]["bead"] or (pk_age is not None and pk_age < PARK_MAX_H * 3600)):
-            cls, kind, why, nxt = "evidence", None, f"{pk_cond['text']} (parked {fmt_age(pk_age)} ago): {pk[1]}", ""
-            ln["evidence"] = dict(pk_cond["evidence"])
-        elif pk and rs != "released" and not ln["driver_alive"] and pk_cond and pk_cond["state"] == "hold":
-            wait(f"parked {pk_cond['text']} ({fmt_age(pk_age)} ago): {pk[1]}")
-        elif pk and rs != "released" and not ln["driver_alive"] and pk_age is not None and pk_age < PARK_MAX_H * 3600:
-            wait(f"parked {fmt_age(pk_age)} ago{pk_bad}: {pk[1]}")
-        elif pk and rs != "released" and not ln["driver_alive"]:
-            need("stale", f"parked longer than {PARK_MAX_H} h{pk_bad}: {pk[1]}", "Re-check the park reason; unpark (edit parked.tsv) or act.")
-        elif rs == "released":
-            cls, why = "released", "run released"
-        elif rs == "busy":
-            na = ri.get("native_activity_age_s")
-            # 2026-10-14: pf-task's native activity follows the Codex rollout file only. OpenCode turns write
-            # opencode.db instead, so na kept growing from admission (route showed "4.2 h idle" mid-turn, db written
-            # seconds earlier). OpenCode retry stalls are caught by the opencode-quota probe instead.
-            if (ri.get("runtime") or ln.get("runtime")) == "opencode":
-                na = None
-            started = parse_ts(ln["driver_starts"][-1]) if ln["driver_starts"] else None
-            if ri.get("reconciler_alive") is False:
-                need("stale", "run busy but reconciler dead", "Check run.status; restart the reconciler or rotate the lane.")
-            elif na is not None and na > BUSY_IDLE_ALARM_MIN * 60:
-                need("stale", f"run busy, no native activity for {fmt_age(na)}",
-                     "Check the worker (tmux/session); nudge with run.send or rotate the lane.")
-            elif na is None and ri.get("last_turn_end") is None and started and age_s(started) > BUSY_NO_SIGNAL_ALARM_MIN * 60:
-                need("stale", f"run busy with no activity signal, admitted {fmt_age(age_s(started))} ago",
-                     "Confirm the first turn actually started (models.get, runtime log); re-admit if refused.")
-            else:
-                cls, why = "running", f"turn in progress" + (f" ({fmt_age(na)} since activity)" if na is not None else "") \
-                    + (f"; last status {st}" if st else "; first turn")
-        else:
-            merged = pi and pi["state"] == "MERGED"
-            kind_for_state = {"HANDBACK": "handback", "BOOT_READY": "boot_ready", "BLOCKED": "blocked",
-                              "MERGE_READY": "merge_ready"}.get(st or "", "handback")
-            km = kit_match(reason + " " + ((ls or {}).get("raw") or "")) if st in ("BOOT_READY", "HANDBACK") else None
-            blocker = None
-            if st == "BLOCKED":
-                for cand in BEAD_RE.findall((ls or {}).get("raw") or ""):
-                    if cand != ln["bead"] and cand in index:
-                        blocker = index[cand]
-                        break
-            if not ln["driver_alive"]:
-                if st in NEEDS_STATES or st in (None, "NONE"):
-                    if st == "BLOCKED" and blocker and blocker["status"] not in ("closed",):
-                        wait(f"BLOCKED on {blocker['id']} ({blocker['status']}): {reason[:120]}")
-                    elif st == "BLOCKED" and blocker and blocker["status"] == "closed":
-                        need("blocked", f"blocker {blocker['id']} is now closed; lane still BLOCKED, no driver",
-                             "run.send the lane: its blocker landed; restart lane-drive.sh.")
-                    elif wqd and wqd["state"] != "consumed":
-                        wait(wqd["text"])
-                    elif wqd:
-                        need("handback", f"{wqd['text']}; lane still {st} BOOT_READY on gen {st_gen[:8]} with no live driver",
-                             "Read the window's receipt / close outcome, post the result to the lane (run.send) and drive "
-                             "it on (a retry is a new package + generation).")
-                    elif km and km[0] == "pending":
-                        wait(f"kit queued on the bench as {km[1]} (position {km[2]} of {dev['pending_count']})")
-                    elif km and km[0] == "running":
-                        wait(f"its kit {km[1]} is running on the bench now")
-                    elif km and km[0] == "done":
-                        need("handback", f"{st}: its kit ran as {km[1]} (verdict {km[2] or '?'}); lane idle, no driver",
-                             "Read the receipt, post the result to the lane (run.send) and drive it on.")
-                    elif pi and pi["merge_ready"]:
-                        need("merge_ready", f"PR {pr_txt} is merge-ready (CI green, approved); lane {st}, no driver",
-                             "Merge with pf-pr-merge.sh, then continue or release the run.")
-                    elif merged and st in ("HANDBACK", "MERGE_READY"):
-                        need("handback", f"PR {pr_txt} merged; lane {st} with no driver",
-                             "Verify the merge on origin/main, update/close the bead, release the run.")
-                    elif st == "HANDBACK" and reason.upper().startswith("BOOT_READY"):
-                        need("boot_ready", f"HANDBACK: {shown}", "Seal check, add the kit to queue.tsv (.new + mv) or read its receipt.")
-                    elif st in (None, "NONE"):
-                        need("undriven", "no parseable status line yet and no live driver",
-                             "Read the run's last message; nudge for a status line or restart the driver.")
-                    else:
-                        extra = f": {shown}" if shown else ""
-                        nx = {"boot_ready": "Queue the kit (queue.tsv .new + mv) or read its result, then continue the lane.",
-                              "blocked": "Resolve or re-route the blocker; continue the lane.",
-                              "merge_ready": "Merge with pf-pr-merge.sh, then release the run.",
-                              }.get(kind_for_state, "Read the last result, verify, then run.send the next step or release the run.")
-                        if pi and pi["state"] == "OPEN" and pi["ci_green"] and pi["review"] != "APPROVED":
-                            extra += f" (CI green {pi['checks']['success']}/{pi['checks']['total']}, review {pi['review'] or 'none'})"
-                        unchecked = "; run state unchecked this refresh" if ri.get("error", "").startswith("not checked") else ""
-                        need(kind_for_state, f"{st}{extra}; no live driver{unchecked}", nx)
-                elif st in WAIT_STATES:
-                    if merged:
-                        need("handback", f"PR {pr_txt} merged while the lane sat in {st} with no driver",
-                             "Verify origin/main, close the bead, release the run.")
-                    elif pi and pi["merge_ready"]:
-                        need("merge_ready", f"PR {pr_txt} merge-ready; lane {st}, no driver",
-                             "Merge with pf-pr-merge.sh, then continue or release the run.")
-                    elif pi and pi["state"] == "OPEN" and pi["checks"]["failed"]:
-                        need("undriven", f"CI RED on {pr_txt} ({', '.join(pi['checks']['failed_names'][:3])}); lane {st}, no driver",
-                             "Restart lane-drive.sh so the lane gets the CI result, or run.send it yourself.")
-                    else:
-                        need("undriven", f"lane in {st} with no live driver" + (f" ({pr_txt})" if pr else ""),
-                             "Restart lane-drive.sh for this run (or release it if finished).")
-                else:
-                    need("undriven", f"lane state {st} with no live driver", "Restart the driver or release the run.")
-            else:  # driver alive
-                if st == "CI_WAIT":
-                    cw = ln["ci_wait"] or {}
-                    if pi and pi["state"] == "MERGED":
-                        wait(f"PR {pr_txt} merged; driver will continue the lane")
-                    elif pi and pi["state"] == "OPEN":
-                        c = pi["checks"]
-                        if pi["merge_ready"]:
-                            wait(f"CI green + approved on {pr_txt}; driver continues the lane")
-                        elif c["failed"]:
-                            wait(f"CI RED on {pr_txt} ({c['failed']} failed); driver continues the lane")
-                        elif c["pending"] and st_age is not None and st_age > CI_STALL_MIN * 60 \
-                                and not (pk and pk_age is not None and pk_age < PARK_MAX_H * 3600
-                                         and re.search(r"(?i)stall|pool|stuck", pk[1] or "")):
-                            need("ci_stall", f"CI still pending on {pr_txt} {fmt_age(st_age)} after CI_WAIT "
-                                 f"({c['success']}/{c['total']} done)",
-                                 "Check the pending job's runner (queued with no runner = pool stall: "
-                                 "pf-runner-pool journal on mm); fix or reroute, never raise a timeout.")
-                        elif c["pending"]:
-                            wait(f"CI running on {pr_txt}: {c['success']}/{c['total']} done")
-                        else:
-                            wait(f"CI green on {pr_txt}; review {pi['review'] or 'pending'}; driver continues")
-                    elif cw.get("result"):
-                        wait(f"CI {cw['result']} on {cw.get('pr')}; driver continuing")
-                    else:
-                        wait(f"CI_WAIT on {pr_txt or '?'}; driver watching")
-                elif st in WAIT_STATES:
-                    wait(f"{st}: {reason[:120] or 'driver watching'}")
-                elif st in NEEDS_STATES and st_age is not None and st_age > HANDBACK_WITH_DRIVER_GRACE_MIN * 60 \
-                        and rs not in (None,):
-                    if km and km[0] == "pending":
-                        wait(f"kit queued on the bench as {km[1]} (position {km[2]})")
-                    elif wqd:   # queued / held / active / consumed: the live driver carries the lane on
-                        wait(f"{wqd['text']}; driver alive, run {rs}")
-                    else:
-                        need(kind_for_state, f"{st} {fmt_age(st_age)} ago; a driver is alive but the run is {rs}",
-                             "Read the handback; run.send the next step or release and stop the driver.")
-                elif st in NEEDS_STATES:
-                    wait(f"{wqd['text']}; driver alive" if wqd else f"{st} just now; driver winding down")
-                elif st in (None, "NONE"):
-                    if rs in ("admitted", None) and "error" in ri:
-                        cls, why = "unknown", f"run state unknown ({ri.get('error', '')[:80]})"
-                    else:
-                        wait(f"driver watching; run {rs or '?'}; no status line yet")
-                else:
-                    wait(f"{st}; driver alive, run {rs}")
-        if "error" in ri and cls in ("unknown",):
-            cls, why = "unknown", f"run.status unavailable: {ri['error'][:100]}; last lane status {st}"
-            if not ln["driver_alive"] and st in NEEDS_STATES:
-                need(kind_for_state, f"{st} ({reason[:100]}); no driver; run state unknown", "Check run.status by hand; act on the handback.")
-        bnd = RUN_BOUNDS.get(ln["run"] or "")
-        mt = ln.get("messages_total")
-        budget_ack = bool(pk) and pk_age is not None and pk_age < PARK_MAX_H * 3600 \
-            and re.search(r"(?i)budget|rotat", pk[1] or "") is not None
-        if ri.get("run_home") == "/home/matt/.pf-task-v2" and bnd and isinstance(mt, int) \
-                and mt >= bnd - 4 and rs not in ("released", None) and not budget_ack:
-            need("budget", f"messages {mt}/{bnd}: the next sends hit session_message_budget_exhausted",
-                 "Rotate now: ask for a pushed-head handoff on the bead, then dispatch the next generation.")
-        pk_typed_hold = cls in ("waiting", "evidence") and bool(pk_cond) and pk_cond["state"] in ("hold", "evidence")
-        if cls not in ("needs", "released") and not (pk and ((pk_age is not None and pk_age < PARK_MAX_H * 3600) or pk_hold
-                                                             or pk_typed_hold)):
-            for spr in ln.get("secondary_prs") or []:
-                spi = prs.get(spr)
-                if spi and not spi.get("error") and spi.get("state") == "OPEN" and spi["checks"]["failed"] \
-                        and not spi["checks"]["pending"]:
-                    need("secondary_red", f"CI RED on {spr} ({', '.join(spi['checks']['failed_names'][:3])}); "
-                         f"the lane's driver watches only {pr_txt or 'its latest PR'}",
-                         f"run.send the lane the failing lines for {spr} (or restart its driver on that PR).")
-                    break
-        ln.update(cls=cls, kind=kind, cls_reason=why, next=nxt)
-        if cls == "needs":
-            needs.append({"kind": kind, "id": ln["lane"], "lane": ln["lane"], "bead": ln["bead"], "run": ln["run"],
-                          "pr": pr, "reason": why, "since": iso(st_ts), "age_s": st_age, "next": nxt,
-                          "bead_title": ln["bead_title"]})
-    return needs
+    age = age_s(parse_ts(row[0]))
+    cond = park_condition(row[1], row[0], index, owner, lanes_by_name, prs)
+    if cond:
+        return {**cond, "typed": True, "since": row[0], "reason": row[1], "age_s": age}
+    state = "hold" if age is not None and age < WAIT_MAX_H * 3600 else "fire"
+    text = f"untyped wait is {fmt_age(age)} old" if age is not None else "untyped wait time is unreadable"
+    return {"state": state, "text": text, "typed": False, "since": row[0], "reason": row[1], "age_s": age,
+            "evidence": None, "release": False}
 
 
 def collect_model_quota():
@@ -1604,44 +1703,6 @@ def collect_model_quota():
                 out.append({"pid": pid, "port": m.group(1), "session": sid, "worktree": cwd.replace("/home/matt/wt/", ""),
                             "message": msg[:200]})
     return out
-
-
-def classify_device(dev):
-    needs = []
-    if dev.get("halted"):
-        needs.append({"kind": "device", "id": "device-queue", "lane": None, "bead": None, "run": None, "pr": None,
-                      "reason": f"device queue HALTED: {dev['halt_line'][:160]}; {dev['pending_count']} steps pending",
-                      "since": dev.get("halt_at"), "age_s": age_s(parse_ts(dev.get("halt_at"))),
-                      "next": "Verify the bench (pf-device.sh status, relays, PSU), then restart queue-runner.sh."})
-    elif not dev["runner_alive"] and dev["pending_count"] > 0 and not dev["kit_running"] and not dev["running"]:
-        needs.append({"kind": "device", "id": "device-queue", "lane": None, "bead": None, "run": None, "pr": None,
-                      "reason": f"queue-runner.sh not running with {dev['pending_count']} steps pending; bench idle",
-                      "since": dev.get("log_mtime"), "age_s": age_s(parse_ts(dev.get("log_mtime"))),
-                      "next": "Start queue-runner.sh (run_in_background) after a device_idle check."})
-    # 2026-10-19: lanes whose kit is queued in the window queue now wait instead of nagging boot_ready, so a stopped
-    # queue must surface on its own or those lanes would wait on nothing.
-    wq = dev.get("window_queue") or {}
-    # 2026-10-20 (tsp-mc9m.41.1030.55.1, review 5588845556): window-queue.sh keeps .active and writes .pause when it
-    # stops after popping its only row, so depth is 0 while a window is unresolved; an active item alerts too.
-    wq_act = wq.get("active") or None
-    if (wq.get("depth") or wq_act) and (wq.get("paused") or wq.get("running") is False):
-        why = f"PAUSED ({wq.get('pause_line') or 'pause file'})" if wq.get("paused") else "not running"
-        nxt = ("Diagnose the STOP (needs/window-queue-stop-*.txt), then window-queue.sh --resume complete|incomplete "
-               "and restart it (run_in_background)." if wq.get("paused") else
-               "Start window-queue.sh (run_in_background); check window-queue.sh --status first.")
-        since = wq.get("pause_at") if wq.get("paused") else None
-        needs.append({"kind": "device", "id": "window-queue", "lane": None, "bead": None, "run": None, "pr": None,
-                      "reason": f"window queue {why[:160]} with {wq.get('depth') or 0} rows pending"
-                                + (f" and active item gen {(wq_act.get('gen') or '?')[:8]} (phase {wq_act.get('phase') or '?'}, "
-                                   f"lane {wq_act.get('lane') or '?'}) unresolved" if wq_act else ""), "since": since,
-                      "age_s": age_s(parse_ts(since)), "next": nxt})
-    r = dev.get("running")
-    if r and r["elapsed_s"] and r["elapsed_s"] > KIT_STUCK_H * 3600:
-        needs.append({"kind": "stale", "id": r["name"], "lane": None, "bead": None, "run": None, "pr": None,
-                      "reason": f"device step {r['name']} running {fmt_age(r['elapsed_s'])} without a result",
-                      "since": r["started_at"], "age_s": r["elapsed_s"],
-                      "next": "Read its receipt/log; if wedged, recover the bench and let the runner continue."})
-    return needs
 
 
 # 2026-10-12 owner: "the laptop has been busy for days". Found: 14.7k zombies under the ChatGPT app, a pf-task
@@ -1716,6 +1777,139 @@ def classify_host():
                      "file a producer-side fix."}]
 
 
+# 2026-11-03 (tsp-mc9m.60.29.84.24): pf-shared-refresh skipped test-node-farm (dirty) for 6 days, saying so only in
+# its journal; KIT2's deploy admission waited on it and the bench idled. The refresh hook (mission-control
+# .agents/hooks/session-refresh-shared-checkouts.sh, every 5 min) now writes one row per checkout to this file; a
+# checkout skipped (any state but ok) for more than SHARED_REFRESH_SKIP_ALARM_MIN, measured to its last check, is a
+# host need. Exceptions come only from shared-refresh-allow.json beside this file: {path, states, reason, bead}; a
+# malformed allowlist voids every exception. A missing, unreadable or stale status file is ONE "status unknown" need,
+# not none: the board and the timer share this laptop, so no fresh file means the refresh stopped reporting, which is
+# the silent failure this exists to end. A stale file's rows are summarized but never alarmed; a malformed row adds
+# one "status unknown" need beside the valid rows' alarms.
+SHARED_REFRESH_STATUS = (os.environ.get("FB_SHARED_REFRESH_STATUS")
+                         or os.path.expanduser("~/.local/state/pocketforge/shared-refresh.json"))
+SHARED_REFRESH_ALLOW = (os.environ.get("FB_SHARED_REFRESH_ALLOW")
+                        or os.path.join(os.path.dirname(os.path.abspath(__file__)), "shared-refresh-allow.json"))
+SHARED_REFRESH_SKIP_ALARM_MIN = 60   # skipped continuously for longer than this -> host need
+SHARED_REFRESH_STALE_MIN = 30        # status file older than this (the timer runs every 5 min) -> status unknown
+SHARED_REFRESH_SKIP_STATES = ("dirty", "ahead", "diverged", "fetch_failed", "ff_refused", "detached", "no_upstream",
+                              "not_checked")
+SHARED_REFRESH_NEXT = {
+    "dirty": "Preserve the tracked edits first (commit to a branch and push, or stash under a named message), then "
+             "restore the clean checkout; the 5-min timer fast-forwards it. Never reset unpreserved work.",
+    "ahead": "Preserve the local commits (push to preserve/<repo>-<sha> or land them by PR), then reset the shared "
+             "checkout to its upstream.",
+    "diverged": "Preserve the local commits (push to preserve/<repo>-<sha> or land them by PR), then reset the shared "
+                "checkout to its upstream.",
+    "fetch_failed": "Upstream branch deleted: switch the clean checkout back to the default branch. Otherwise check "
+                    "the remote, network and credentials (journalctl --user -u pf-shared-refresh).",
+    "ff_refused": "An untracked file blocks the fast-forward (the detail names it): preserve it elsewhere or land it "
+                  "upstream, then let the timer refresh.",
+    "detached": "Check out the default branch.",
+    "no_upstream": "Set the branch's upstream or switch to the default branch.",
+    "not_checked": "The refresh budget ran out before this checkout: find the slow fetches earlier in the list "
+                   "(journalctl --user -u pf-shared-refresh).",
+}
+
+
+def load_shared_refresh_allow():
+    """Committed exceptions by path; unreadable or malformed -> none (fail closed) and a source error."""
+    try:
+        with open(SHARED_REFRESH_ALLOW) as f:
+            rows = json.load(f)
+        if not isinstance(rows, list):
+            raise ValueError("top level must be a list")
+        out = {}
+        for r in rows:
+            if not (isinstance(r, dict) and isinstance(r.get("path"), str) and r["path"]
+                    and isinstance(r.get("reason"), str) and r["reason"].strip()
+                    and isinstance(r.get("bead"), str) and r["bead"].strip()
+                    and isinstance(r.get("states"), list) and r["states"]
+                    and all(s in SHARED_REFRESH_SKIP_STATES for s in r["states"])):
+                raise ValueError(f"entry needs path, reason, bead and states from {SHARED_REFRESH_SKIP_STATES}: "
+                                 f"{r!r:.160}")
+            out[r["path"]] = r
+        return out
+    except Exception as ex:
+        err("shared refresh allowlist", ex)
+        return {}
+
+
+def classify_shared_refresh(now=None):
+    """(needs, summary) from the pf-shared-refresh status file; see the comment above SHARED_REFRESH_STATUS."""
+    now = now or NOW
+    summary = {"status_path": SHARED_REFRESH_STATUS, "generated_at": None, "complete": None, "error": None,
+               "checkouts": []}
+
+    def unknown(why, since=None):
+        summary["error"] = why
+        return [{"kind": "host", "id": "shared-refresh-status", "lane": None, "bead": None, "run": None, "pr": None,
+                 "reason": f"shared-checkout refresh status unknown: {why}", "since": since,
+                 "age_s": max(0.0, (now - parse_ts(since)).total_seconds()) if parse_ts(since) else None,
+                 "next": "Check `systemctl --user status pf-shared-refresh.timer` and `journalctl --user -u "
+                         "pf-shared-refresh`; the mission-control refresh hook rewrites this file every run."}]
+
+    try:
+        with open(SHARED_REFRESH_STATUS) as f:
+            doc = json.load(f)
+    except FileNotFoundError:
+        return unknown(f"{SHARED_REFRESH_STATUS} missing"), summary
+    except Exception as ex:
+        err("shared refresh status", ex)
+        return unknown(f"{SHARED_REFRESH_STATUS} unreadable: {str(ex)[:160]}"), summary
+    gen = parse_ts(doc.get("generated_at")) if isinstance(doc, dict) else None
+    rows = doc.get("checkouts") if isinstance(doc, dict) else None
+    if gen is None or not isinstance(rows, list):
+        err("shared refresh status", "needs generated_at and a checkouts list")
+        return unknown(f"{SHARED_REFRESH_STATUS} has no generated_at or checkouts list"), summary
+    summary.update(generated_at=iso(gen), complete=doc.get("complete"))
+    valid = [c for c in rows if isinstance(c, dict) and isinstance(c.get("path"), str) and c["path"]
+             and isinstance(c.get("state"), str) and c["state"]]
+    needs = []
+    gen_age = (now - gen).total_seconds()
+    # A stale file is status unknown as a whole: exactly one need, and its rows are summarized but never alarmed.
+    stale = gen_age > SHARED_REFRESH_STALE_MIN * 60
+    if stale:
+        skips = sum(1 for c in valid if c["state"] != "ok")
+        needs += unknown(f"last written {fmt_age(gen_age)} ago at {iso(gen)} (the timer runs every 5 min); it "
+                         f"recorded {skips} skipped checkout(s)", iso(gen))
+    elif len(valid) != len(rows):
+        # A malformed row could hide a skipped checkout: fail closed; the valid rows are still classified.
+        bad = next(c for c in rows if not any(c is v for v in valid))
+        err("shared refresh status", f"{len(rows) - len(valid)} checkout row(s) without a path and state: {bad!r:.120}")
+        needs += unknown(f"{len(rows) - len(valid)} malformed checkout row(s) in {SHARED_REFRESH_STATUS}", iso(gen))
+    allow = load_shared_refresh_allow()
+    for c in valid:
+        path, state = c["path"], c["state"]
+        first = parse_ts(c.get("first_skipped_at")) if isinstance(c.get("first_skipped_at"), str) else None
+        checked = (parse_ts(c.get("checked_at")) if isinstance(c.get("checked_at"), str) else None) or gen
+        skipped_s = max(0.0, (checked - first).total_seconds()) if state != "ok" and first else None
+        a = allow.get(path)
+        allowed = a["reason"] if a and state in a["states"] else None
+        # an unreadable skip start fails closed: alarm now rather than never
+        alarm = (not stale and state != "ok" and allowed is None
+                 and (skipped_s is None or skipped_s > SHARED_REFRESH_SKIP_ALARM_MIN * 60))
+        summary["checkouts"].append(dict({k: c.get(k) for k in ("path", "branch", "state", "ahead", "behind",
+                                                                "first_skipped_at", "last_ok_at", "checked_at")},
+                                         skipped_s=skipped_s, alarm=alarm, allowlisted=allowed))
+        if not alarm:
+            continue
+        ab = (f" ahead={c.get('ahead')} behind={c.get('behind')}"
+              if isinstance(c.get("ahead"), int) and isinstance(c.get("behind"), int) else "")
+        detail = str(c.get("detail") or "")[:200]
+        needs.append({
+            "kind": "host", "id": f"shared-refresh:{path}", "lane": None, "bead": None, "run": None, "pr": None,
+            "reason": (f"shared checkout {path} [{c.get('branch') or 'detached'}] not refreshed for "
+                       f"{fmt_age(skipped_s) if skipped_s is not None else 'an unknown time'}: {state}{ab}"
+                       + (f" ({detail})" if detail else "")
+                       + f"; last ok {c.get('last_ok_at') or 'not seen'}"),
+            "since": c.get("first_skipped_at"), "age_s": skipped_s,
+            "next": "gpu-16 ops: " + SHARED_REFRESH_NEXT.get(
+                state, "inspect `git -C <path> status` and journalctl --user -u pf-shared-refresh."),
+        })
+    return needs, summary
+
+
 def slim_bead(b, index, lane_by_bead):
     par = index.get(b.get("parent") or "") or {}
     blockers = []
@@ -1764,6 +1958,129 @@ def owned_beads(index, lane_by_bead):
     return out
 
 
+def reclassify_needs(needs, index, lanes, preserved_runs, comments, now):
+    """Move board noise out of Needs without dropping an item.
+
+    ``index`` is the single ``bd list --all --json`` snapshot collected above.
+    Parent traversal never shells out and refuses cycles/missing parents.  Only a
+    lane with a live driver can own descendants; an old undriven run sharing a
+    bead with a live lane is therefore attributed to that live lane.
+    """
+    live_lane_by_bead = {}
+    for lane in lanes:
+        if lane.get("bead") and lane.get("driver_alive") and lane.get("cls") != "released":
+            live_lane_by_bead.setdefault(lane["bead"], lane.get("lane"))
+
+    active_preserves = {}
+    for row in preserved_runs or []:
+        if not isinstance(row, dict) or not row.get("run_id") or not row.get("reason") or not row.get("until"):
+            continue
+        until = parse_ts(row["until"])
+        if until is not None and until > now:
+            active_preserves[row["run_id"]] = row
+
+    def ancestor_lane(bead):
+        seen = set()
+        current = bead
+        for _depth in range(64):
+            if not current or current in seen:
+                return None
+            seen.add(current)
+            if current in live_lane_by_bead:
+                return live_lane_by_bead[current]
+            current = (index.get(current) or {}).get("parent")
+        return None
+
+    def blockers(bead):
+        out = []
+        for dep in (index.get(bead) or {}).get("deps") or []:
+            if dep.get("type") != "blocks":
+                continue
+            target = index.get(dep.get("id")) or {}
+            if target.get("status") != "closed":
+                out.append({"id": dep.get("id"), "status": target.get("status", "unknown"),
+                            "title": target.get("title", "")[:120]})
+        return out
+
+    def comment_text(bead):
+        info = (comments or {}).get(bead) or {}
+        return "\n".join(str(c.get("body") or "") for c in info.get("comments") or [])
+
+    def comment_blocker(bead):
+        text = comment_text(bead)
+        matches = re.findall(
+            r"(?:existing\s+owner\s+bead|blocked\s+(?:on|by))\s+"
+            r"(tsp-[a-z0-9]+(?:\.[0-9]+)*)",
+            text,
+            re.IGNORECASE,
+        )
+        for target_id in reversed(matches):
+            target = index.get(target_id) or {}
+            if target.get("status") != "closed":
+                return {"id": target_id, "status": target.get("status", "unknown"),
+                        "title": target.get("title", "")[:120]}
+        return None
+
+    result = {name: [] for name in
+              ("needs", "waiting_owner_attended", "waiting_bench", "blocked_by_bead",
+               "closed_live_run", "lane_attributed", "blocked", "preserved", "mechanical",
+               "stale_summary")}
+    for original in needs:
+        row = dict(original)
+        keep = active_preserves.get(row.get("run"))
+        if keep:
+            row.update({"preserve_reason": keep["reason"], "preserve_until": keep["until"],
+                        "waiting_owner": keep.get("owner") or "gpu-14"})
+            if (index.get(row.get("bead")) or {}).get("status") == "closed":
+                result["closed_live_run"].append(row)
+            else:
+                result["preserved"].append(row)
+            continue
+        text = comment_text(row.get("bead"))
+        if text and (re.search(r"gpu-14\s+ruling:.*?deferred", text, re.IGNORECASE | re.DOTALL)
+                     or re.search(r"owner[- ]attended|attended\s+bench\s+tests?\s+are\s+deferred",
+                                  text, re.IGNORECASE)):
+            row.update({"waiting_owner": "owner",
+                        "waiting_reason": "owner-attended acceptance is explicitly deferred"})
+            result["waiting_owner_attended"].append(row)
+            continue
+        named_blocker = comment_blocker(row.get("bead"))
+        if named_blocker:
+            row.update({"waiting_owner": named_blocker["id"], "blockers": [named_blocker],
+                        "waiting_reason": "repair is owned by another open bead"})
+            result["blocked_by_bead"].append(row)
+            continue
+        if (text and re.search(r"device\s+proof\s+(?:remains\s+)?pending|waiting\s+for\s+device\s+proof",
+                               text, re.IGNORECASE)
+                and re.search(r"deploy(?:ed|_ready|ment)", text, re.IGNORECASE)):
+            row.update({"waiting_owner": "gpu-14",
+                        "waiting_reason": "deployed; device proof waits for the held bench"})
+            result["waiting_bench"].append(row)
+            continue
+        open_blockers = blockers(row.get("bead")) if row.get("bead") else []
+        if open_blockers:
+            row["blockers"] = open_blockers
+            row["original_kind"] = row.get("kind")
+            row["kind"] = "blocked"
+            result["blocked"].append(row)
+            continue
+        if row.get("kind") == "handback" and re.search(r"\bPR\s+\S+#\d+\s+merged\b", row.get("reason") or ""):
+            row["mechanical_reason"] = "merged PR awaits release and guarded bead close"
+            result["mechanical"].append(row)
+            continue
+        if row.get("kind") == "stale" and row.get("id") == "stale-beads" and not row.get("bead"):
+            result["stale_summary"].append(row)
+            continue
+        if row.get("kind") in ("stale", "undriven") and row.get("bead"):
+            lane = ancestor_lane(row["bead"])
+            if lane and lane != row.get("lane"):
+                row["attributed_lane"] = lane
+                result["lane_attributed"].append(row)
+                continue
+        result["needs"].append(row)
+    return result
+
+
 def fetch_comments_for(ids):
     out = {}
     with cf.ThreadPoolExecutor(COMMENTS_PARALLEL) as ex:
@@ -1774,7 +2091,7 @@ def fetch_comments_for(ids):
     return out
 
 
-def classify_beads(index, ready_ids, lanes, comments):
+def classify_beads(index, ready_ids, lanes, comments, prs=None, owner=None):
     lane_by_bead = {}
     for ln in lanes:
         if ln.get("bead") and ln.get("cls") != "released":
@@ -1859,9 +2176,8 @@ def classify_beads(index, ready_ids, lanes, comments):
     older = []
     for s in stale:
         # waits.tsv (fresh entries) records why a bead waits; keep it out of both the individual and the aggregate need.
-        _w = wait_for(s["id"])
-        _wa = age_s(parse_ts(_w[0])) if _w else None
-        if _w and _wa is not None and _wa < WAIT_MAX_H * 3600:
+        _wd = wait_condition(s["id"], index, owner or {}, {ln["lane"]: ln for ln in lanes}, prs or {})
+        if _wd and _wd["state"] in ("hold", "evidence"):
             continue
         if s["age_s"] > STALE_INDIVIDUAL_H * 3600:
             older.append(s)
@@ -1900,7 +2216,6 @@ HW_KV_RE = re.compile(r"(?:^|\s)(row|state|build)=(\S+)")
 HW_EV_RE = re.compile(r"(?:^|\s)evidence=")
 HW_STATE_CANON = {s.lower(): s for s in HW_STATES}
 HW_STATE_CANON.update({"hw_limit": "HW-limit", "hwlimit": "HW-limit", "hw-limited": "HW-limit"})
-LANE_SUFFIX_RE = re.compile(r"-(?:g|r)\d+$")
 KIT_REV_RE = re.compile(r"-(?:r|g|v)\d+$")                  # kit revision suffix: ...-M8-r8 is the M8 family
 KIT_PATH_RE = re.compile(r"(?:/home/matt|~)/recovery/[A-Za-z0-9._+/-]+")
 GEN32_RE = re.compile(r"(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])")
@@ -2017,14 +2332,15 @@ def collect_hw_comments(index, ids):
 
 def lane_coverage(lanes):
     """-> (driving {bead: [lane]}, queued {bead: [lane-queue name]}). Driving: a live (not released, not evidence)
-    lane's admitted bead plus its latest assign-next pop (lane-queue/*.done rows for the lane's run). Queued: the
-    non-comment lines of lane-queue/<lane>.txt (assign-next.sh pops the first)."""
+    lane's admitted bead, the row beads its cluster bead lists under '## Rows' (gpu-16 cluster lanes), plus its
+    latest assign-next pop (lane-queue/*.done rows for the lane's run). Queued: the non-comment lines of
+    lane-queue/<lane>.txt (assign-next.sh pops the first)."""
     driving, queued = {}, {}
     live = [l for l in lanes if l.get("cls") not in ("released", "evidence")]
     runs = {l["run"]: l["lane"] for l in live if l.get("run")}
     for l in live:
-        if l.get("bead"):
-            driving.setdefault(l["bead"], set()).add(l["lane"])
+        for bid in ([l["bead"]] if l.get("bead") else []) + list(l.get("rows") or []):
+            driving.setdefault(bid, set()).add(l["lane"])
     last_pop = {}
     for path in glob.glob(os.path.join(LANE_QUEUE_DIR, "*.done")):
         try:
@@ -2066,7 +2382,7 @@ def queued_kits(wq, lanes):
             by_run[l["run"]] = l["lane"]
     kits, pos = [], 0
     try:
-        with open(wq.get("path") or os.path.join(WQ_BOARD, "window-queue.tsv"), errors="replace") as f:
+        with open(wq["path"], errors="replace") as f:   # 2026-11-02: window queue retired; only an explicit wq reads
             for raw in f:
                 line = raw.rstrip("\n")
                 if not line.strip() or line.lstrip().startswith("#"):
@@ -2171,9 +2487,11 @@ def kit_family_match(path, pkg):
 
 
 def kit_cover(kits, kit_ids, index, comments, driving):
-    """-> (named {bead: [kit]}, by_anchor_refs(anchor) -> [kit], batches {label: [member bead]}).
+    """-> (named {bead: [kit]}, by_anchor_refs(anchor) -> [kit], batches {label: [member bead]}, by_lane(lane) -> [kit]).
     named: the bead ids a queued kit's package names (rule b). by_anchor_refs: kits an anchor's own comments name by
-    package path/family or generation (rule b, read from the bead side). batches: batch:<slug> label -> members (rule c)."""
+    package path/family or generation (rule b, read from the bead side). batches: batch:<slug> label -> members (rule c).
+    by_lane: the queued kits a lane owns (rule c: a batch's kit need not name any member, e.g. kleaf2's package sits
+    under the parent epic dir and its text names no member bead)."""
     named = {}
     for k in kits:
         for i in kit_ids.get(k["pkg"]) or []:
@@ -2184,12 +2502,15 @@ def kit_cover(kits, kit_ids, index, comments, driving):
         gens, paths = set(refs.get("gens") or []), refs.get("paths") or []
         return [k for k in kits if (k["gen"] and k["gen"] in gens) or any(kit_family_match(p, k["pkg"]) for p in paths)]
 
+    def by_lane(lane):
+        return [k for k in kits if k["lane"] == lane]
+
     batches = {}
     for bid, b in index.items():
         for lab in b.get("labels") or []:
             if lab.startswith("batch:"):
                 batches.setdefault(lab, []).append(bid)
-    return named, by_refs, batches
+    return named, by_refs, batches, by_lane
 
 
 def child_map(index):
@@ -2234,9 +2555,10 @@ def open_sorted(beads):
 
 def row_kits(anchors, cover, index, driving, kc):
     """Coverage beyond a lane driving the row's own beads: queued/active window-queue kits (rule b, from the package or
-    from the anchor's comments) and batch:<slug> propagation (rule c). -> (kits [{lane, gen, label, position, active,
-    pkg, bead, via}], batch_lanes [{lane, bead, via}])."""
-    named, by_refs, batches = kc
+    from the anchor's comments) and batch:<slug> propagation (rule c): the lanes driving a batch's other members, and the
+    kits those lanes own or the package names. -> (kits [{lane, gen, label, position, active, pkg, bead, via}],
+    batch_lanes [{lane, bead, via}])."""
+    named, by_refs, batches, by_lane = kc
     kits, seen, blanes = [], set(), []
 
     def add(k, bead, via):
@@ -2254,19 +2576,24 @@ def row_kits(anchors, cover, index, driving, kc):
             add(k, a, "comment")
     for a in anchors:
         for lab in sorted(l for l in (index.get(a) or {}).get("labels") or [] if l.startswith("batch:")):
+            lab_lanes = {}      # lane -> the batch member it drives
             for m in sorted(batches.get(lab, ())):
                 if m in cover:
                     continue
                 for ln in sorted(driving.get(m, ())):
+                    lab_lanes.setdefault(ln, m)
                     if all(x["lane"] != ln for x in blanes):
                         blanes.append({"lane": ln, "bead": m, "via": lab})
                 for k in named.get(m, ()):
+                    add(k, m, lab)
+            for ln, m in sorted(lab_lanes.items()):
+                for k in by_lane(ln):
                     add(k, m, lab)
     kits.sort(key=lambda k: (not k["active"], k["position"] or 0))
     return kits, blanes
 
 
-def hw_row_live(r, index, kids, comments, driving, queued, kc=None):
+def hw_row_live(r, index, kids, comments, driving, queued, kc=None, wins=()):
     anchors = [a for a in (r.get("anchor") or []) if a]
     roots = set(anchors)
     desc = descendants(roots, kids)
@@ -2282,6 +2609,8 @@ def hw_row_live(r, index, kids, comments, driving, queued, kc=None):
     lanes = sorted({l for i in cover for l in driving.get(i, ())})
     queue = sorted({(l, i) for i in cover for l in queued.get(i, ())})
     kits, blanes = row_kits(anchors, cover, index, driving, kc) if kc else ([], [])
+    wfields, wkits = row_windows(anchors, wins)
+    kits = kits + wkits      # an open kit window on the row is live coverage (closed windows are evidence, not kits)
     hws = sorted((dict(h, bead=a) for a in anchors for h in (comments.get(a) or {}).get("hw") or []
                   if h.get("row") in (None, "", r["id"])), key=lambda h: h.get("at") or "")
     if hws:
@@ -2311,14 +2640,25 @@ def hw_row_live(r, index, kids, comments, driving, queued, kc=None):
                 "evidence_age_s": ev_age, "flags": flags,
                 "seed_state": r.get("seed_state"), "seed_at": r.get("seed_at")})
     out.update(st)
+    out.update(wfields)      # after st: derived window fields can never overwrite state/evidence_at (different keys)
     return out
 
 
-def build_hardware(index, lanes, comments, doc, wq=None):
+def build_hardware(index, lanes, comments, doc, wq=None, windows=None):
     kids = child_map(index)
     driving, queued = lane_coverage(lanes)
-    kits = queued_kits(wq or {}, lanes)
+    kits = queued_kits(wq, lanes) if wq else []   # 2026-11-02: the window queue is retired; no queued kits
     kc = kit_cover(kits, kit_bead_ids(kits), index, comments, driving)
+    # 2026-11-05 (tsp-hqm1p.100): the kit-window runner's results are the device evidence now
+    wins, scanned = windows if windows is not None else collect_hw_windows()
+    anchors = hw_anchor_rows(doc)
+    for w in wins:
+        w["links"] = window_links(w["bead"], index, anchors)
+        for a in comment_links(w, comments, anchors):
+            if VIA_RANK["comment"] < VIA_RANK.get(w["links"].get(a), 9):
+                w["links"][a] = "comment"
+    unmapped = sum(1 for w in wins if not w["links"])
+    lane_only = sum(1 for w in wins if w["links"] and all(v not in STRONG_VIA for v in w["links"].values()))
     flag_names = ("unowned", "evidence_old", "anchor_closed", "no_anchor")
 
     def tally(rows):
@@ -2328,10 +2668,18 @@ def build_hardware(index, lanes, comments, doc, wq=None):
                 t[x["state"]] = t.get(x["state"], 0) + 1
         return t
 
-    rows = [hw_row_live(r, index, kids, comments, driving, queued, kc) for r in doc.get("rows") or []]
+    rows = [hw_row_live(r, index, kids, comments, driving, queued, kc, wins) for r in doc.get("rows") or []]
     hardware = {"rows": rows, "tally": tally(rows), "flags": {f: sum(1 for x in rows if f in x["flags"]) for f in flag_names},
-                "source": HW_ROWS_FILE, "evidence_old_d": HW_EVIDENCE_OLD_D, "kits_scanned": len(kits)}
-    prows = [hw_row_live(p, index, kids, comments, driving, queued, kc) for p in doc.get("priorities") or []]
+                "source": HW_ROWS_FILE, "evidence_old_d": HW_EVIDENCE_OLD_D, "kits_scanned": len(kits) + scanned,
+                "windows_lookback_h": HW_WINDOWS_LOOKBACK_H,
+                "windows_closed": sum(1 for w in wins if w["result"] in ("ok", "fail")),
+                "windows_open": sum(1 for w in wins if w["result"] == "open"), "windows_unmapped": unmapped,
+                "windows_lane_only": lane_only,
+                "rows_with_window": sum(1 for x in rows if x.get("window_at")),
+                # a lane window counts when the row has no tied window or the lane window is newer than it
+                "rows_with_lane_window": sum(1 for x in rows if x.get("lane_window_at")
+                                             and (not x.get("window_at") or x["lane_window_at"] > x["window_at"]))}
+    prows = [hw_row_live(p, index, kids, comments, driving, queued, kc, wins) for p in doc.get("priorities") or []]
     goals, placed = [], set()
     for g in doc.get("goals") or []:
         anchors = [a for a in (g.get("anchor") or []) if a]
@@ -2407,37 +2755,21 @@ def collect_backlog(index):
 
 
 def main():
-    drivers = live_drivers()
-    adm = admission_map()
-    cache = load_cache()
     beads_box = {}
 
-    # preliminary lane->bead map (admission files + cached run.status) so the stale scan can run alongside pf-task
+    # preliminary lane->bead map (gpu-16 runs/run-<NAME>.json task of each active.tsv lane) so the stale scan can run
+    # alongside the pf-task lookups
     prelim_lanes = set()
-    cutoff = time.time() - LANE_LOG_WINDOW_H * 3600
-    for path in glob.glob(os.path.join(G, "*-drive.log")):
-        try:
-            if os.path.getmtime(path) < cutoff:
-                continue
-            txt = open(path, errors="replace").read()
-        except OSError:
-            continue
-        runs = RUN_RE.findall(txt)
-        if runs:
-            rid = runs[-1]
-            t = (adm.get(rid) or {}).get("task") or (cache.get(rid) or {}).get("task")
+    try:
+        for _name, _rid, _home in g16_watch().active_runs():
+            t = (jread(os.path.join(G16_RUNS, f"run-{_name}.json")) or {}).get("task")
             if t:
                 prelim_lanes.add(t)
-    for rid, a in adm.items():
-        if a["mtime"] >= time.time() - ADMISSION_WINDOW_H * 3600 and a.get("task"):
-            prelim_lanes.add(a["task"])
+    except Exception as ex:
+        err("active.tsv (prelim)", ex)
 
     def beads_job():
-        try:
-            beads_box["index"], beads_box["ready"] = collect_beads()
-        except Exception as ex:
-            err("beads", ex)
-            beads_box["index"], beads_box["ready"] = {}, []
+        beads_box["index"], beads_box["ready"] = collect_beads()
         try:
             cands, _ = stale_candidates(beads_box["index"], {b: 1 for b in prelim_lanes})
             beads_box["comments"] = fetch_comments_for([c["id"] for c in cands])
@@ -2455,11 +2787,10 @@ def main():
 
     with cf.ThreadPoolExecutor(2) as ex:
         fut_beads = ex.submit(beads_job)
-        lanes = collect_lanes(drivers, adm, cache)      # sequential pf-task lookups, main thread
-        save_cache(cache)
+        lanes = collect_g16_lanes()                     # sequential pf-task run.status lookups, main thread
         refs = pr_refs_from_lanes(lanes)
         # until_pr=<owner/repo#N> park holds need that PR's state too.
-        for _since, _why in PARKED.values():
+        for _since, _why in list(PARKED.values()) + list(WAITS.values()):
             for _m in re.finditer(r"until_pr=([\w.-]+/[\w.-]+#\d+)", _why):
                 if PR_RE.match(_m.group(1)):
                     refs.setdefault(_m.group(1), None)
@@ -2467,12 +2798,16 @@ def main():
         fut_beads.result()
         prs = fut_prs.result()
     index, ready_ids = beads_box["index"], beads_box["ready"]
-    dev = collect_device()
-    wq = dev["window_queue"]
-    owner = collect_owner_asks()
-    needs = classify_lanes(lanes, prs, index, dev, owner=owner)
-    needs += classify_device(dev)
-    needs += classify_host()
+    for ln in lanes:
+        b = (index.get(ln["bead"]) or {}) if ln.get("bead") and index else {}
+        ln["bead_title"], ln["rows"] = b.get("title"), b.get("rows") or []
+    dev = collect_bench(lanes)
+    owner = collect_owner_asks(index)
+    # 2026-11-02: lane handbacks and blocks reach gpu-16 through its watcher (watch-runs.py EVENTs); the board shows
+    # them in the lanes table (cls needs) and does not repeat them as needs items.
+    needs = classify_host()
+    shared_refresh_needs, shared_refresh = classify_shared_refresh()
+    needs += shared_refresh_needs
     for q in collect_model_quota():
         needs.append({"kind": "blocked", "id": "quota:" + q["worktree"], "lane": None, "bead": q["worktree"].split("/")[0],
                       "run": None, "pr": None,
@@ -2480,12 +2815,13 @@ def main():
                       "since": None, "age_s": None,
                       "next": "Re-route to Codex (WT_ID=<bead>-cx, fetch unpushed commits by path), then POST /session/<id>/abort "
                               "so it cannot wake and push; if the lane is another coordinator's, tell them."})
-    disp, stale, long_idle, bead_needs, lane_by_bead, owned = classify_beads(index, ready_ids, lanes, beads_box.get("comments") or {})
+    disp, stale, long_idle, bead_needs, lane_by_bead, owned = classify_beads(
+        index, ready_ids, lanes, beads_box.get("comments") or {}, prs=prs, owner=owner)
     # 2026-10-20: hardware & driver rows, tier priorities, open backlog. Display only: never needs items.
     hardware, priorities, backlog = {"rows": [], "error": None}, {"goals": []}, None
     if beads_box.get("hw_doc") is not None and index:
         try:
-            hardware, priorities = build_hardware(index, lanes, beads_box.get("hw_comments") or {}, beads_box["hw_doc"], wq)
+            hardware, priorities = build_hardware(index, lanes, beads_box.get("hw_comments") or {}, beads_box["hw_doc"])
             hardware["comments_fetched"] = beads_box.get("hw_fetched", 0)
         except Exception as ex:
             err("hardware", ex)
@@ -2496,38 +2832,41 @@ def main():
         except Exception as ex:
             err("backlog", ex)
     waited = []
+    lanes_by_name = {ln["lane"]: ln for ln in lanes}
     for n in bead_needs:
-        w = wait_for(n.get("bead") or "")
-        w_age = age_s(parse_ts(w[0])) if w else None
-        if w and w_age is not None and w_age < WAIT_MAX_H * 3600:
-            waited.append({"bead": n["bead"], "kind": n["kind"], "since": w[0], "reason": w[1]})
+        wd = wait_condition(n.get("bead") or "", index, owner, lanes_by_name, prs)
+        if wd and wd["state"] in ("hold", "evidence"):
+            waited.append({"bead": n["bead"], "kind": n["kind"], "since": wd["since"],
+                           "reason": wd["reason"], "condition": wd["text"], "typed": wd["typed"]})
             continue
-        if w:
-            n["reason"] = f"wait recorded longer than {WAIT_MAX_H} h ({w[1][:120]}); " + n["reason"]
+        if wd:
+            n["reason"] = f"wait condition {wd['state']}: {wd['text']} ({wd['reason'][:120]}); " + n["reason"]
         needs.append(n)
     # 2026-10-13: glcrash sat WINDOW_READY on a recorded wait (transport fix deploy) and re-flagged "undriven" every
     # tick. A fresh waits.tsv row for the lane's bead covers an undriven lane need too; handbacks and merges still show.
     kept = []
     for n in needs:
         if n.get("kind") == "undriven" and n.get("bead"):
-            w = wait_for(n["bead"])
-            w_age = age_s(parse_ts(w[0])) if w else None
-            if w and w_age is not None and w_age < WAIT_MAX_H * 3600:
-                waited.append({"bead": n["bead"], "kind": n["kind"], "since": w[0], "reason": w[1]})
+            wd = wait_condition(n["bead"], index, owner, lanes_by_name, prs)
+            if wd and wd["state"] in ("hold", "evidence"):
+                waited.append({"bead": n["bead"], "kind": n["kind"], "since": wd["since"],
+                               "reason": wd["reason"], "condition": wd["text"], "typed": wd["typed"]})
                 continue
         kept.append(n)
     needs[:] = kept
+    ruling_comments = dict(beads_box.get("comments") or {})
+    ruling_ids = sorted({n.get("bead") for n in needs if n.get("bead")})
+    missing_rulings = [bid for bid in ruling_ids if bid not in ruling_comments]
+    if missing_rulings:
+        ruling_comments.update(fetch_comments_for(missing_rulings))
+    truth = reclassify_needs(needs, index, lanes, load_preserved_runs(), ruling_comments, NOW)
+    needs = truth["needs"] + load_coord_needs()
     for n in needs:
         n["rank"] = KIND_RANK.get(n["kind"], 9)
     needs.sort(key=lambda n: (n["rank"], -(n["age_s"] or 0)))
 
     shown = [l for l in lanes if l.get("cls") != "released"]
-    released = [l for l in lanes if l.get("cls") == "released"]
-    evidence = [{"lane": l["lane"], "run": l["run"], "bead": l.get("bead"), "who": l["evidence"]["who"],
-                 "keeper_bead": l["evidence"]["bead"], "reason": (PARKED.get(l["run"] or "") or ("", ""))[1][:300],
-                 "since": (PARKED.get(l["run"] or "") or (None,))[0],
-                 "age_s": age_s(parse_ts((PARKED.get(l["run"] or "") or (None,))[0]))}
-                for l in shown if l.get("cls") == "evidence"]
+    released = [l for l in lanes if l.get("cls") == "released"] + g16_released_rows()
     refd = set()
     for ln in shown:
         if ln.get("bead"):
@@ -2535,6 +2874,14 @@ def main():
     for n in needs:
         if n.get("bead"):
             refd.add(n["bead"])
+    for section in ("waiting_owner_attended", "waiting_bench", "blocked_by_bead", "closed_live_run",
+                    "lane_attributed", "blocked", "preserved", "mechanical", "stale_summary"):
+        for n in truth[section]:
+            if n.get("bead"):
+                refd.add(n["bead"])
+            for blocker in n.get("blockers") or []:
+                if blocker.get("id"):
+                    refd.add(blocker["id"])
     for c in disp["chains"]:
         refd.add(c["blocker"]["id"])
         refd.update(d["id"] for d in c["dependents"])
@@ -2547,8 +2894,6 @@ def main():
         refd.add(s["id"])
         if s.get("parent"):
             refd.add(s["parent"])
-    for x in evidence:
-        refd.update(i for i in (x["bead"], x["keeper_bead"]) if i)
     bindex = {i: {"title": index[i]["title"][:160], "status": index[i]["status"], "type": index[i]["type"],
                   "priority": index[i]["priority"]} for i in refd if i in index}
 
@@ -2556,20 +2901,28 @@ def main():
     for ln in sorted(shown, key=lambda l: ({"needs": 0, "unknown": 1, "waiting": 2, "running": 3}.get(l["cls"], 4),
                                            -(l.get("status_age_s") or 0))):
         lane_rows.append({k: ln.get(k) for k in (
-            "lane", "token", "run", "run_state", "run_checked_at", "run_fresh", "run_error", "bead", "bead_title",
-            "model", "provider", "runtime", "driver_alive", "driver_pids", "driver_etimes", "last_status",
-            "last_event_at", "last_turn_end", "ci_wait", "pr", "pr_head", "reconciler_alive", "controller_alive",
-            "runtime_alive", "native_activity_age_s", "messages_total", "worktree", "blocker_error", "runtime_parked",
-            "cls", "kind", "cls_reason", "next", "log", "log_mtime", "source", "status_age_s", "session_id",
-            "window_queue", "evidence")})
+            "lane", "token", "run", "home", "run_state", "state", "stale_quota", "run_checked_at", "run_fresh",
+            "run_error", "bead", "bead_title", "model", "provider", "runtime", "driver_alive", "last_status",
+            "status_age_s", "last_turn_end", "last_turn_reason", "pr", "reconciler_alive", "controller_alive",
+            "runtime_alive", "native_activity_age_s", "messages_pending", "messages_total", "receipts_total",
+            "receipts_unacked", "worktree", "blocker_error", "cls", "kind", "cls_reason", "next", "source",
+            "session_id", "rows")})
     summary = {
         "needs": len(needs),
+        "waiting_owner_attended": len(truth["waiting_owner_attended"]),
+        "waiting_bench": len(truth["waiting_bench"]),
+        "blocked_by_bead": len(truth["blocked_by_bead"]),
+        "closed_live_run": len(truth["closed_live_run"]),
+        "lane_attributed": len(truth["lane_attributed"]),
+        "blocked_claims": len(truth["blocked"]),
+        "preserved": len(truth["preserved"]),
+        "mechanical": len(truth["mechanical"]),
         "lanes_total": len(shown),
         "lanes_running": sum(1 for l in shown if l["cls"] == "running"),
         "lanes_waiting": sum(1 for l in shown if l["cls"] == "waiting"),
         "lanes_needs": sum(1 for l in shown if l["cls"] == "needs"),
         "lanes_unknown": sum(1 for l in shown if l["cls"] == "unknown"),
-        "lanes_evidence": len(evidence),
+        "lanes_stale_quota": sum(1 for l in shown if l.get("stale_quota")),
         "owned": {w: sum(1 for o in owned if o["assignee"] == w) for w in COORD_OWNERS},
         "lanes_released_hidden": len(released),
         "dispatchable": disp["parallel_total"] + len(disp["newly_unblocked"]),
@@ -2579,12 +2932,17 @@ def main():
         "newly_unblocked": len(disp["newly_unblocked"]),
         "stale": len(stale),
         "owner_asks": owner["count"],
-        "device": {"running": (dev.get("running") or {}).get("name"), "pending": dev["pending_count"],
-                   "halted": dev["halted"], "runner_alive": dev["runner_alive"], "kit_running": dev["kit_running"],
-                   # 2026-10-19: the live queue (window-queue.sh); "pending" above stays the retired queue.tsv count
-                   "wq_depth": wq["depth"], "wq_held": wq["held_count"], "wq_active": (wq["active"] or {}).get("gen"),
-                   "wq_active_phase": (wq["active"] or {}).get("phase"), "wq_paused": wq["paused"],
-                   "wq_running": wq["running"]},
+        # 2026-11-02: BENCH + pf-kit-window-runner (the window queue is retired). running = the open kit window,
+        # pending = BENCH queue requests with no answer yet, halted = runner unit not active
+        "device": {"running": " ".join(x for x in (dev["windows_open"][0]["purpose"], dev["windows_open"][0]["gen"][:8]) if x)
+                   if dev["windows_open"] else None,
+                   "pending": sum(1 for q in dev["queue"] if not q.get("answered")),
+                   "halted": dev["runner"].get("active") != "active", "runner_alive": dev["runner"].get("active") == "active",
+                   "kit_running": bool(dev["windows_open"]), "windows_open": len(dev["windows_open"]),
+                   "bench_state": (dev["bench"] or {}).get("state"),
+                   "bench_verdict": ((dev["bench"] or {}).get("last_status") or {}).get("verdict"),
+                   "queue_total": len(dev["queue"]), "results_24h": (dev["results"] or {}).get("total", 0),
+                   "results_warn": len((dev["results"] or {}).get("warns") or [])},
         "needs_by_kind": {k: sum(1 for n in needs if n["kind"] == k) for k in KIND_RANK},
         "beads_in_scope_in_progress": sum(1 for i, b in index.items() if in_scope(i) and b["status"] == "in_progress"),
         "beads_in_scope_open": sum(1 for i, b in index.items() if in_scope(i) and b["status"] == "open"),
@@ -2592,22 +2950,27 @@ def main():
                      "flags": hardware.get("flags") or {}},
         "backlog_open": (backlog or {}).get("open_total"),
     }
-    dev.pop("pending_all", None)
-    dev.pop("done_rows", None)
-    dev.pop("wq_by_gen", None)
     data = {
         "generated_at": iso(NOW), "generated_epoch": NOW.timestamp(), "host": socket.gethostname(),
         "runtime_s": round(time.time() - T0, 1),
         "thresholds": {k: v for k, v in globals().items() if k.isupper() and isinstance(v, (int, float, str))
-                       and k not in ("G", "MC", "BOARD", "OUT", "CACHE", "OWNER_ASKS", "PFTASK_BIN", "PFTASK_HOME", "NOW", "T0",
-                                     "WQ_BOARD", "KIT_WINDOWS", "HW_ROWS_FILE", "HW_COMMENTS_CACHE", "HW_KITS_CACHE",
-                                     "LANE_QUEUE_DIR")},
+                       and k not in ("G", "G16", "G16_RUNS", "MC", "BOARD", "OUT", "NOW", "T0", "KIT_WINDOWS",
+                                     "RUNNER_UNIT", "TYPED_RESULTS_ROOT", "OWNER_INTAKE", "HW_ROWS_FILE",
+                                     "HW_COMMENTS_CACHE", "HW_KITS_CACHE", "PRESERVED_RUNS_FILE", "COORD_NEEDS_FILE",
+                                     "SHARED_REFRESH_STATUS", "SHARED_REFRESH_ALLOW", "LANE_QUEUE_DIR")},
         "campaign_roots": CAMPAIGN_ROOTS,
         "errors": ERRORS, "summary": summary, "needs": needs, "waits": waited, "lanes": lane_rows,
         "released_runs": [{"lane": l["lane"], "run": l["run"], "bead": l.get("bead")} for l in released],
         "prs": prs, "dispatchable": disp, "device": dev, "stale": stale, "long_idle": long_idle,
-        "owner_asks": owner, "beads_index": bindex, "owned": owned, "evidence": evidence,
+        "owner_asks": owner, "beads_index": bindex, "owned": owned,
+        "lane_attributed": truth["lane_attributed"], "blocked": truth["blocked"],
+        "waiting_owner_attended": truth["waiting_owner_attended"],
+        "waiting_bench": truth["waiting_bench"], "blocked_by_bead": truth["blocked_by_bead"],
+        "closed_live_run": truth["closed_live_run"],
+        "preserved": truth["preserved"], "mechanical": truth["mechanical"],
+        "stale_summary": truth["stale_summary"],
         "hardware": hardware, "priorities": priorities, "backlog": backlog,
+        "shared_refresh": shared_refresh,
     }
     tmp = OUT + ".new"
     with open(tmp, "w") as f:

@@ -31,6 +31,10 @@ close_window() {
   opened=0
 }
 die() { log "STOP $*"; close_window; echo "$(ts) GUARD_DONE result=STOP reason=$* out=$OUT"; exit 2; }
+# gpu-14 2026-10-19 (tsp-mc9m.41.1032, owner: no RAM-disk staging): seq1/seq2 below stage under /run/pf-iter and
+# /run/pf-uinput-guard, which are RAM on the DUT. Refuse before any window opens. To reuse this script, repoint
+# Step.Command, TargetPaths and RemotePath to the transport's disk staging root and /var/tmp/pf-guard/<gen>, then drop this line.
+echo "$(date -u +%FT%TZ) GUARD_DONE result=STOP reason=ram_staging_retired hint=repoint_to_disk_root_tsp-mc9m.41.1032"; exit 2
 trap 'close_window' EXIT
 [ -d "$D" ] || die runner_clone_unknown
 for d in "$HOME"/.local/state/pocketforge/kit-windows/*/; do

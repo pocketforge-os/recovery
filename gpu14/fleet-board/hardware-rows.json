@@ -201,9 +201,9 @@
       "name": "Vibration motor",
       "subsystem": "Controls",
       "scope": "Later",
-      "driver": "none identified (no force-feedback path in DT or defconfig)",
-      "driver_source": "none",
-      "inventory_driver_config": "No ff/rumble implementation is identified in DT or defconfig.",
+      "driver": "gpio-vibrator (upstream) on active-high PH3; EV_FF/FF_RUMBLE enumerated on Build57",
+      "driver_source": "upstream driver + board DT/config patches",
+      "inventory_driver_config": "CONFIG_INPUT_GPIO_VIBRA=y; exclusive active-high PH3, independent PL11 IR RX retained in source. Build57 kernel fab62c73324f; actual EV_FF enumeration verified, pulse/IR/owner felt acceptance pending.",
       "anchor": [
         "tsp-mc9m.41.923.5"
       ],
@@ -492,6 +492,15 @@
         "tsp-mc9m.41.984.54"
       ],
       "why": "owner 10-14: tier 2, spare capacity only; never takes a tier-1 device window or builder slot"
+    },
+    {
+      "id": "bench",
+      "tier": null,
+      "name": "Device bench throughput (speeds up every tier)",
+      "anchor": [
+        "tsp-mc9m.41.1030.56"
+      ],
+      "why": "owner 10-21: track loading images over SSH (stage, reboot, verify on device) as its own line of work; today every device window spends ~18 min loading its image over FEL"
     },
     {
       "id": "later",
@@ -918,6 +927,45 @@
       "seed_state": "Untested",
       "seed_at": "2026-10-18",
       "seed_evidence": "Your ruling: tested on your own handheld with a real battery; bench readings prove nothing. 10-18: parked for last; it runs on the handheld once OTA works."
+    },
+    {
+      "id": "ssh_image_load",
+      "name": "Image load over SSH: compressed copy, write on device, SHA256 check on device",
+      "goal": "bench",
+      "area": "Device bench",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.41.1018.12.36"
+      ],
+      "seed_state": "Partial",
+      "seed_at": "2026-10-21",
+      "seed_evidence": "Code path exists (self_flash_v2) but never runs in the queue: 37/37 boots took FEL (~18 min; USB write 4.3 MB/s plus a 3-4 min readback). OTA lane r5 live proof (gen f2562482) is queued second. Target under 9 min."
+    },
+    {
+      "id": "powered_handoff",
+      "name": "Leave the DUT powered between windows so the next one can load over SSH",
+      "goal": "bench",
+      "area": "Device bench",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.41.1030.56.9"
+      ],
+      "seed_state": "Untested",
+      "seed_at": "2026-10-21",
+      "seed_evidence": "Every teardown powers off today, so SSH loading is never eligible. Design question Q2 in the throughput doc; filed 10-21."
+    },
+    {
+      "id": "same_image_reuse",
+      "name": "Same image back to back: skip the reload (LoadPath=reuse)",
+      "goal": "bench",
+      "area": "Device bench",
+      "scope": "Day one",
+      "anchor": [
+        "tsp-mc9m.41.1030.56.6"
+      ],
+      "seed_state": "Partial",
+      "seed_at": "2026-10-21",
+      "seed_evidence": "Live in the kit runner since automation c45d8ba3 (10-20); rebase offers (#1658) make more kits eligible. Savings not measured yet."
     }
   ]
 }

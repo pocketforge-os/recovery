@@ -14,7 +14,8 @@ bead=$1 repo=$2 base=$3 model=$4 effort=$5 approval=$6 scope=$7 pfile=$8 sandbox
 # 2026-10-12 (poolslow pft-aac73dd2): the prompt named no status token, so the worker could not end with the
 # `<TOKEN>_STATUS` line its driver parses, and it cost a nudge turn. Refuse such a prompt before any worktree exists.
 grep -qE 'Use the token [A-Z0-9_]+_STATUS' "$pfile" || { echo "DISPATCH_REFUSED reason=prompt_without_status_token hint=add 'Use the token <LANE>_STATUS. End every turn with exactly one <LANE>_STATUS line.' to $pfile"; exit 2; }
-H=/home/matt/.pf-task-v3; export PF_TASK_BIN=/home/matt/.local/libexec/pf-task-v3/pf-task PF_TASK_HOST_CONFIG=/home/matt/.config/pocketforge/pf-task-v3/pf-task-host.json; MC=/home/matt/mission-control; R=/home/matt/recovery/gpu14
+# 2026-10-19 gpu-14: v4 home (#1586), precheck before run.start
+H=/home/matt/.pf-task-v8; export PF_TASK_BIN=/home/matt/.local/libexec/pf-task-v8/pf-task PF_TASK_HOST_CONFIG=/home/matt/.config/pocketforge/pf-task-v8/pf-task-host.json; MC=/home/matt/mission-control; R=/home/matt/recovery/gpu14
 parent=$(cd $MC && bd show "$bead" --json | jq -r '.[0].parent // empty')
 [ -n "$parent" ] || { echo "REFUSE no_parent $bead"; exit 2; }
 (cd $MC && timeout 120 python3 scripts/pf-managed.py --home $H --role coordinator doctor "$bead" | jq -e '.overall=="ready"' >/dev/null) || { echo "REFUSE doctor_not_ready $bead"; exit 3; }
@@ -37,7 +38,9 @@ for xr in $(printf '%s' "${EXTRA_REPOS:-}" | tr ',' ' '); do
 Also in your set: $XW (branch $(git -C "$XW" rev-parse --abbrev-ref HEAD), at origin/$xb $(git -C "$XW" rev-parse --short HEAD))."
 done
 # PR_BRANCH=1: continue an existing PR branch in place (no ff to base; the worker rebases per its prompt).
-if [ "${PR_BRANCH:-0}" = 1 ]; then git -C "$W" fetch -q origin "$base"; at="existing PR branch"; else git -C "$W" fetch -q origin "$base" || { echo "REFUSE base_fetch_failed $base"; exit 4; }
+# 2026-10-19: a fresh worktree stayed on its new pf-wt branch at main (dispatch-opencode.sh fixed 10-17); reset it to the PR branch.
+if [ "${PR_BRANCH:-0}" = 1 ]; then git -C "$W" fetch -q origin "$base" || { echo "REFUSE base_fetch_failed $base"; exit 4; }
+  [ "$fresh" = 1 ] && git -C "$W" reset -q --hard "origin/$base"; at="existing PR branch"; else git -C "$W" fetch -q origin "$base" || { echo "REFUSE base_fetch_failed $base"; exit 4; }
   # 2026-10-10: pf-wt branches from the DEFAULT branch; reset a fresh worktree to a non-default base, refuse a failed ff.
   if [ "$fresh" = 1 ]; then git -C "$W" reset -q --hard "origin/$base"; else git -C "$W" merge --ff-only -q "origin/$base" || { echo "REFUSE base_not_fast_forward $W origin/$base"; exit 4; }; fi; at="origin/$base"; fi
 [ -z "$(git -C "$W" status --porcelain)" ] || { echo "REFUSE dirty_worktree $W"; exit 4; }
@@ -49,11 +52,13 @@ $(cat $R/codex-worker-rules.txt | sed "s/<bead>/$bead/g")"
 key="gpu14-$bead-$(date -u +%Y%m%dT%H%M%SZ)"
 jq -n --arg key "$key" --arg parent "$parent" --arg task "$bead" --arg scope "$scope" --arg wt "$W" --arg model "$model" --arg effort "$effort" --arg approval "$approval" --arg sandbox "$sandbox" --arg p "$prompt" --arg tts "${TURN_TIMEOUT:-3600}" \
   '{key:$key, parent:$parent, task:$task, scope:$scope, runtime:"claude", execution_host:"matt-laptop", model:{modelID:$model, providerID:"anthropic"}, claude:{tools:["Read","Edit","Write","Bash","Grep","Glob"], allowed_tools:["Read","Edit","Write","Bash","Grep","Glob","mcp__pf_task"]}, worktree:$wt, role:"worker", bounds:{context_tokens:163840, max_children:0, max_depth:0, turn_timeout_seconds:($tts|tonumber), timeout_continuations:6}, prompt:$p}' > $R/run-$wid.json
+if ! precheck=$("$R/pf-task-run-home" precheck --parent "$parent" --key "$key" --control-home "$H" 2>&1); then
+  echo "DISPATCH_REFUSED reason=precheck_refused key=$key detail=${precheck:0:400}"; exit 9; fi
 # 2026-10-13: a refused admission used to exit silently under set -e; print the refusal body.
 if ! (cd $MC && timeout 180 python3 scripts/pf-managed.py --home $H --role coordinator run.start - < $R/run-$wid.json) > $R/admission-$wid.json; then
   echo "DISPATCH_REFUSED admission=$(head -c 400 $R/admission-$wid.json)"; exit 7; fi
 run_id=$(jq -r .run_id $R/admission-$wid.json); generation=$(jq -r .generation $R/admission-$wid.json)
-recovery=("$R/pf-task-run-home" register --run-id "$run_id" --generation "$generation" --control-home "$H" --pf-task "$PF_TASK_BIN" --host-config "$PF_TASK_HOST_CONFIG" --revision b58007901fa2ad4fbafe3ab938db63ce89447725)
+recovery=("$R/pf-task-run-home" register --run-id "$run_id" --generation "$generation" --control-home "$H" --pf-task "$PF_TASK_BIN" --host-config "$PF_TASK_HOST_CONFIG" --revision fedf0804e4111a5ef4f62136e9134bc2315e1cb9)
 set +e; registry_error=$("${recovery[@]}" 2>&1); registry_rc=$?; set -e
 if [ "$registry_rc" -ne 0 ]; then
   printf 'DISPATCH_REGISTRY_FAILED run=%s rc=%s recovery=' "$run_id" "$registry_rc" >&2

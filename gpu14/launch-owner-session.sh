@@ -24,6 +24,9 @@ RUN
 cat >"$dir/sidecar.sh" <<RUN
 #!/usr/bin/env bash
 export CLAUDE_CODE_SESSION_ID=$sid PF_COMMS_NAME=$name
+# gpu-14 2026-10-19 (openmbu): a sidecar started before the session's first-turn register exited at once and left
+# the session deaf until gpu-14 restarted it. Wait (bounded, 30 min) for the id to appear in the roster first.
+for _ in \$(seq 360); do pf-comms status 2>/dev/null | grep -q "agent $name " && break; sleep 5; done
 exec pf-comms listen --id $name --sidecar
 RUN
 chmod 0755 "$dir/run.sh" "$dir/sidecar.sh"
