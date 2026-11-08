@@ -3,12 +3,14 @@
 # A lane that pushed and must wait for CI ends its turn with
 #   <TOKEN> state=CI_WAIT pr=<owner/repo>#<n> head=<40-hex sha>
 # This helper waits for that exact head's checks, then writes the lane's next prompt to <msg_out>:
-#   GREEN -> author review on the exact head, then pf-pr-merge.sh --dry-run, then HANDBACK merge-ready
+#   GREEN -> the DRIVER runs the author review on the exact head (review-at-head.sh; CIW_REVIEW=0 restores the old
+#            lane-runs-review prompt). Approved -> HANDBACK merge-ready; findings -> REVIEW_CHANGES fix round;
+#            review failed/capped/head moved -> REVIEW_BLOCKED for gpu-14 (exit 3)
 #   RED   -> the failing jobs with bounded log lines; diagnose from logs, fix test-first, push, CI_WAIT again
 # A known flake (FLAKE_CHECKS, job conclusion "cancelled" at its runtime cap) is rerun ONCE per head
 # through the dispatch App and waited on again, without waking the lane or gpu-14.
-# Prints one line: CIW result=GREEN|RED|CONFLICT|HEAD_MOVED|TIMEOUT|BAD_ARGS ... ; exit 0 for GREEN/RED (message
-# written), 3 for anything gpu-14 must look at (no message written).
+# Prints one line: CIW result=GREEN|RED|REVIEW_CHANGES|REVIEW_BLOCKED|CONFLICT|HEAD_MOVED|TIMEOUT|BAD_ARGS ... ; exit 0 for
+# GREEN/RED/REVIEW_CHANGES (message written), 3 for anything gpu-14 must look at (no message written).
 # usage: ci-wait-continue.sh <owner/repo#n> <head_sha> <TOKEN> <msg_out> [max_minutes=240]
 set -uo pipefail
 prspec=${1:-} head=${2:-} TOK=${3:-} out=${4:-} max_min=${5:-240}
@@ -17,6 +19,8 @@ POLL_S=${CIW_POLL_S:-90}
 FLAKE_CHECKS=${CIW_FLAKE_CHECKS:-pf-runner-pool}
 RERUN_CMD=${CIW_RERUN_CMD:-/home/matt/recovery/gpu14/ci-dispatch-rerun.sh}
 STATE_DIR=${CIW_STATE_DIR:-/home/matt/recovery/gpu14/.ciw}
+REVIEW=${CIW_REVIEW:-1}
+REVIEW_HELPER=${CIW_REVIEW_HELPER:-/home/matt/recovery/gpu14/review-at-head.sh}
 mkdir -p "$STATE_DIR" 2>/dev/null && [ -w "$STATE_DIR" ] || { echo "CIW result=BAD_ARGS reason=state_dir_unwritable dir=$STATE_DIR"; exit 3; }
 
 if ! [[ $prspec =~ ^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([0-9]+)$ ]] || ! [[ $head =~ ^[0-9a-f]{10,64}$ ]] \
@@ -76,15 +80,35 @@ conflict_exit() { local base; base=$($GH pr view "$num" -R "$repo" --json baseRe
 # 2026-10-13 (homelan infra#79): GitHub refuses to start a workflow it cannot admit (org sha_pinning_required with
 # `actions/checkout@v4`, a disallowed action, invalid YAML). That run ends conclusion=startup_failure with NO check, so
 # `gh pr checks` stayed empty and the lane sat in CI_WAIT 30 min toward TIMEOUT. Such a run at the exact head is final.
-startup_failures() { $GH api "repos/$repo/actions/runs?head_sha=$head&per_page=50" --jq '.workflow_runs[] | select(.conclusion=="startup_failure") | "\(.id)\t\(.path)"' 2>/dev/null; }
+# 2026-10-26 (rtemp tnf#709 baa82fe6): a workflow GitHub parses but cannot run (`${{ runner.temp }}` in job-level env)
+# ends conclusion=failure with ZERO jobs, not startup_failure; the lane sat 70 min in CI_WAIT. A failed run with no
+# jobs is the same refusal. An unreadable jobs count is not treated as zero (keep waiting toward TIMEOUT).
+startup_failures() {
+  $GH api "repos/$repo/actions/runs?head_sha=$head&per_page=50" --jq '.workflow_runs[] | select(.status=="completed" and (.conclusion=="startup_failure" or .conclusion=="failure")) | "\(.id)\t\(.path)\t\(.conclusion)"' 2>/dev/null |
+    while IFS=$'\t' read -r rid rpath rc; do
+      [ -n "$rid" ] || continue
+      if [ "$rc" = startup_failure ] || [ "$($GH api "repos/$repo/actions/runs/$rid/jobs" --jq .total_count 2>/dev/null)" = 0 ]; then
+        printf '%s\t%s\n' "$rid" "$rpath"
+      fi
+    done
+}
 startup_failure_exit() { # $1 = startup_failures output
   {
-    echo "gpu-14 driver: CI on $prspec exact head $head did not start: GitHub refused these workflow runs at startup (conclusion=startup_failure; no checks, no logs):"
+    echo "gpu-14 driver: CI on $prspec exact head $head did not start: GitHub refused these workflow runs at startup (conclusion=startup_failure, or failure with zero jobs; no checks, no logs):"
     printf '%s\n' "$1" | while IFS=$'\t' read -r rid rpath; do echo "- $rpath (run $rid)"; done
-    echo "Usual causes, in this order: (1) an action not pinned to a full 40-hex commit SHA (pocketforge-os enforces sha_pinning_required; e.g. \`actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\`); (2) an action outside the org's allowed list; (3) invalid workflow syntax, or a runs-on label/runner group this repo cannot use. Copy the pattern of a passing workflow in the same repo."
+    echo "Usual causes, in this order: (1) an action not pinned to a full 40-hex commit SHA (pocketforge-os enforces sha_pinning_required; e.g. \`actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2\`); (2) an action outside the org's allowed list; (3) invalid workflow syntax, or a runs-on label/runner group this repo cannot use; (4) an expression context used where GitHub does not provide it, e.g. `${{ runner.temp }}` in workflow- or job-level `env:` (use `$RUNNER_TEMP` inside a step instead). Copy the pattern of a passing workflow in the same repo."
     echo "Fix it in a NEW commit, push, and end with \`$TOK state=CI_WAIT pr=$prspec head=<new 40-hex sha>\`. End with exactly one \`$TOK state=...\` line."
   } >"$out"
   echo "CIW result=STARTUP_FAILURE pr=$prspec head=$head runs=$(printf '%s\n' "$1" | cut -f1 | paste -sd, -)"; exit 0
+}
+green_lane_reviews() { # CIW_REVIEW=0: the lane runs the review itself (behaviour before 2026-10-19)
+      cat >"$out" <<EOF
+gpu-14 driver: CI on $prspec exact head $head is GREEN ($counts).
+Proceed (owner D1 bring-up mode, 2026-10-16T22:39Z): author review on that exact head: one review, then one same-reviewer --continue re-look that is VERIFY-ONLY on the final head (scoped to the fix commits) and is the exact-head approval pf-pr-merge needs; if it finds a defect in a fix commit, one fix plus one more verify-only pass. Fix only findings CAUSED by this PR's own change, in NEW commits (never amend/rebase/force-push). Any finding not caused by this PR's change (pre-existing code, merged-in main, hardening ideas, scope growth) gets a thread reply "declined, routed to <bead-id>": file that follow-up bead after a \`bd search\` for it (extend a match instead): \`bd create --parent <this bead> --labels batch:<this bead's batch> --metadata '{"worker_tier":"<tier>","dedupe_query":"<the words you searched>"}'\` (the shim refuses a missing parent, batch label or dedupe_query, and a near-duplicate title unless --allow-similar=<id>), resolve the thread, and do NOT fix it here. No scope added after approval; keep PRs under ~400 changed lines. Once the verify-only pass approves the final head and CI is green, merge-ready: no new review round. Then \`pf-pr-merge.sh --dry-run $prspec\`, then HANDBACK merge-ready with the head sha.
+If you push a new commit instead, end with \`$TOK state=CI_WAIT pr=$prspec head=<new 40-hex sha>\` and the driver waits for its CI.
+End with exactly one \`$TOK state=...\` line.
+EOF
+      echo "CIW result=GREEN pr=$prspec head=$head $counts"; exit 0
 }
 checks() { $GH pr checks "$num" -R "$repo" 2>/dev/null; }
 job_conclusion() { $GH api "repos/$repo/actions/jobs/$1" --jq .conclusion 2>/dev/null; }
@@ -170,13 +194,33 @@ while :; do
       if [ -z "$bad" ]; then
         # A refused workflow is not green even when the other workflows passed.
         sf=$(startup_failures); [ -z "$sf" ] || startup_failure_exit "$sf"
-        cat >"$out" <<EOF
-gpu-14 driver: CI on $prspec exact head $head is GREEN ($counts).
-Proceed (owner D1 bring-up mode, 2026-10-16T22:39Z): author review on that exact head: one review, then one same-reviewer --continue re-look that is VERIFY-ONLY on the final head (scoped to the fix commits) and is the exact-head approval pf-pr-merge needs; if it finds a defect in a fix commit, one fix plus one more verify-only pass. Fix only findings CAUSED by this PR's own change, in NEW commits (never amend/rebase/force-push). Any finding not caused by this PR's change (pre-existing code, merged-in main, hardening ideas, scope growth) gets a thread reply "declined, routed to <bead-id>": file that follow-up bead (bd create, worker_tier, parent = this bead), resolve the thread, and do NOT fix it here. No scope added after approval; keep PRs under ~400 changed lines. Once the verify-only pass approves the final head and CI is green, merge-ready: no new review round. Then \`pf-pr-merge.sh --dry-run $prspec\`, then HANDBACK merge-ready with the head sha.
-If you push a new commit instead, end with \`$TOK state=CI_WAIT pr=$prspec head=<new 40-hex sha>\` and the driver waits for its CI.
+        [ "$REVIEW" = 1 ] || green_lane_reviews
+        # 2026-10-19 (proc-coord, tsp-mc9m.41.1030; kernel-sunxi-7.x#114): the lane was told to review on GREEN, the
+        # review admission 404'd, and nobody saw the open thread for ~3 h. The driver now reviews the green head itself
+        # and routes the verdict: the gate's own dry-run decides, and findings go back to the same lane.
+        rv=$("$REVIEW_HELPER" "$prspec" "$head" "$out.findings"); rvrc=$?
+        echo "$(date -u +%FT%TZ) CIW $rv" >&2
+        case "$rvrc:$rv" in
+          0:*"result=APPROVED"*)
+            cat >"$out" <<EOF
+gpu-14 driver: CI on $prspec exact head $head is GREEN ($counts), and the driver's author review APPROVED that head: \`pf-pr-merge.sh --dry-run $prspec --expect-head $head\` reports would_merge (exact-head review, no open conversations). Do NOT run another review.
+Check your bead's acceptance evidence against this head, then end with \`$TOK state=HANDBACK reason=MERGE_READY pr=$prspec head=$head\` (add producer_run=<sha> when the PR changes a gate, guard, lint, preflight, harness or workflow).
+If you push a new commit instead, end with \`$TOK state=CI_WAIT pr=$prspec head=<new 40-hex sha>\` and the driver waits for its CI and reviews it.
 End with exactly one \`$TOK state=...\` line.
 EOF
-        echo "CIW result=GREEN pr=$prspec head=$head $counts"; exit 0
+            echo "CIW result=GREEN pr=$prspec head=$head $counts review=approved"; exit 0 ;;
+          0:*"result=CHANGES"*)
+            {
+              echo "gpu-14 driver: CI on $prspec exact head $head is GREEN ($counts), but the driver's author review did NOT approve it."
+              cat "$out.findings" 2>/dev/null
+              echo "Fix only findings CAUSED by this PR's own change, in NEW commits (never amend/rebase/force-push), reply to each thread with the fixing commit, and resolve it. Findings outside the PR's delta (pre-existing code, merged-in main, hardening ideas, scope growth) go to beads, never into the PR: reply \"declined, routed to <bead-id>\", file that bead after a bd search for it (extend a match instead): bd create --parent <this bead> --labels batch:<this bead's batch> --metadata '{\"worker_tier\":\"<tier>\",\"dedupe_query\":\"<the words you searched>\"}' (the shim refuses a missing parent, batch label or dedupe_query, and a near-duplicate title unless --allow-similar=<id>), and resolve the thread. No scope growth; keep PRs under ~400 changed lines."
+              echo "Do NOT run the reviewer yourself: after your push the driver waits for CI and runs the same-reviewer verify-only re-look (owner D1: one review plus one re-look per PR)."
+              echo "Push, then end with \`$TOK state=CI_WAIT pr=$prspec head=<new 40-hex sha>\`. If you cannot act on a finding, quote it and end with \`$TOK state=HANDBACK reason=BLOCKED detail=review_finding\`."
+              echo "End with exactly one \`$TOK state=...\` line."
+            } >"$out"
+            echo "CIW result=REVIEW_CHANGES pr=$prspec head=$head $counts ${rv#REVIEW result=CHANGES }"; exit 0 ;;
+          *) echo "CIW result=REVIEW_BLOCKED pr=$prspec head=$head $counts ${rv#REVIEW result=BLOCKED }"; exit 3 ;;
+        esac
       fi
       # Known-flake rule: every failing check is in FLAKE_CHECKS and its job concluded "cancelled".
       all_flake=1; jobs=(); rr_kind=""; primary=0

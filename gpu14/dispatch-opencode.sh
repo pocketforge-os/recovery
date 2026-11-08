@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # v3 dispatch: lifetime message counts are absent by owner ruling. Per-turn/context/child bounds remain.
+# gpu-14 2026-10-26: v10 home (release fd278158), same as dispatch-codex.sh; owner bought QwenCloud credit packs to offload Codex.
 # gpu-14: admit one managed OpenCode worker run (Qwen/DeepSeek via bailian-token-plan-personal, or local vllm) for a bead. Prints run_id and generation.
 # usage: dispatch-opencode.sh <bead> <repo> <default-branch> <providerID> <modelID> <context_tokens> <scope> <task-prompt-file>
 set -euo pipefail
 bead=$1 repo=$2 base=$3 provider=$4 model=$5 ctx=$6 scope=$7 pfile=$8
-H=/home/matt/.pf-task-v3; export PF_TASK_BIN=/home/matt/.local/libexec/pf-task-v3/pf-task PF_TASK_HOST_CONFIG=/home/matt/.config/pocketforge/pf-task-v3/pf-task-host.json; MC=/home/matt/mission-control; GPU14_ROOT=${GPU14_ROOT:-/home/matt/recovery/gpu14}; RESOLVER=$GPU14_ROOT/pf-task-run-home; R=$GPU14_ROOT
+# 2026-10-19 gpu-14: v4 home (#1586), precheck before run.start
+H=/home/matt/.pf-task-v10; export PF_TASK_BIN=/home/matt/.local/libexec/pf-task-v10/pf-task PF_TASK_HOST_CONFIG=/home/matt/.config/pocketforge/pf-task-v10/pf-task-host.json PF_TASK_MIN_FREE_BYTES=5368709120; MC=/home/matt/mission-control; GPU14_ROOT=${GPU14_ROOT:-/home/matt/recovery/gpu14}; RESOLVER=$GPU14_ROOT/pf-task-run-home; R=$GPU14_ROOT
 # Other coordinators (browser-eval 2026-10-10): COORD=<id> uses /home/matt/recovery/<id> for the rules file
 # (worker-rules.txt there, else RULES_FILE) and the run/admission JSON, and prefixes the idempotency key.
 COORD=${COORD:-gpu-14}
@@ -49,7 +51,10 @@ parent=$(cd $MC && bd show "$bead" --json | jq -r '.[0].parent // empty')
 W=/home/matt/wt/${WT_ID:-$bead}/$repo
 fresh=0; [ -d "$W" ] || { (cd $MC && pf-wt create "${WT_ID:-$bead}" --repos "$repo" >/dev/null) && fresh=1; }
 # PR_BRANCH=1: continue an existing PR branch in place (no ff to base), same as dispatch-codex.sh.
-if [ "${PR_BRANCH:-0}" = 1 ]; then git -C "$W" fetch -q origin "$base"; else git -C "$W" fetch -q origin "$base" || { echo "REFUSE base_fetch_failed $base"; exit 4; }
+# 2026-10-17: a FRESH worktree (WT_ID rotation) for PR_BRANCH=1 was left on a new pf-wt branch at main; tfar g2 and
+# velocity both started on the wrong commit. Reset it to the PR branch; the worker pushes HEAD:<base> fast-forward.
+if [ "${PR_BRANCH:-0}" = 1 ]; then git -C "$W" fetch -q origin "$base" || { echo "REFUSE base_fetch_failed $base"; exit 4; }
+  [ "$fresh" = 1 ] && git -C "$W" reset -q --hard "origin/$base"; else git -C "$W" fetch -q origin "$base" || { echo "REFUSE base_fetch_failed $base"; exit 4; }
   # 2026-10-10: pf-wt branches from the DEFAULT branch; a non-descendant base (gamescope pin branch) failed the
   # ff silently and the worker started at the wrong commit. A fresh worktree is reset to the base; an existing
   # one must fast-forward or we refuse.
@@ -86,9 +91,11 @@ PERM='[{"permission":"bash","pattern":"*","action":"allow"},{"permission":"edit"
 key="${COORD//-/}-oc-$bead-$(date -u +%Y%m%dT%H%M%SZ)"
 jq -n --arg tts "${TURN_TIMEOUT:-3600}" --arg key "$key" --arg parent "$parent" --arg task "$bead" --arg scope "$scope" --arg wt "$W" --arg model "$model" --arg provider "$provider" --argjson ctx "$ctx" --argjson perm "$PERM" --arg p "$prompt" \
   '{key:$key, parent:$parent, task:$task, scope:$scope, runtime:"opencode", execution_host:"matt-laptop", model:{modelID:$model, providerID:$provider}, worktree:$wt, permission:$perm, role:"worker", bounds:{context_tokens:$ctx, max_children:0, max_depth:0, turn_timeout_seconds:($tts|tonumber)}, prompt:$p}' > $R/run-oc-$bead.json
+if ! precheck=$("$RESOLVER" precheck --parent "$parent" --key "$key" --control-home "$H" 2>&1); then
+  echo "DISPATCH_REFUSED reason=precheck_refused key=$key detail=${precheck:0:400}"; exit 9; fi
 if ! (cd $MC && timeout 180 python3 scripts/pf-managed.py --home $H --role coordinator run.start - < $R/run-oc-$bead.json) > $R/admission-oc-$bead.json; then echo "DISPATCH_REFUSED admission=$(head -c 400 $R/admission-oc-$bead.json)"; exit 7; fi
 run_id=$(jq -r .run_id $R/admission-oc-$bead.json); generation=$(jq -r .generation $R/admission-oc-$bead.json)
-recovery=("$RESOLVER" register --run-id "$run_id" --generation "$generation" --control-home "$H" --pf-task "$PF_TASK_BIN" --host-config "$PF_TASK_HOST_CONFIG" --revision b58007901fa2ad4fbafe3ab938db63ce89447725)
+recovery=("$RESOLVER" register --run-id "$run_id" --generation "$generation" --control-home "$H" --pf-task "$PF_TASK_BIN" --host-config "$PF_TASK_HOST_CONFIG" --revision fd278158ec72b98a109a63caeacf254c6ed8130e)
 set +e; registry_error=$("${recovery[@]}" 2>&1); registry_rc=$?; set -e
 if [ "$registry_rc" -ne 0 ]; then
   printf 'DISPATCH_REGISTRY_FAILED run=%s rc=%s recovery=' "$run_id" "$registry_rc" >&2

@@ -26,11 +26,21 @@ cat >"$T/rerun" <<'STUB'
 echo "$*" >>"$CIW_TEST_DIR/reruns"; echo "RERUN ok"
 STUB
 chmod +x "$T/rerun"
+# review-at-head.sh stub: prints $CIW_TEST_DIR/review (default APPROVED), exits $CIW_TEST_DIR/review.rc (default 0),
+# writes $CIW_TEST_DIR/findings to the findings file when present, and records its calls.
+cat >"$T/review" <<'STUB'
+#!/usr/bin/env bash
+d=$CIW_TEST_DIR; echo "$*" >>"$d/review.calls"
+[ -e "$d/findings" ] && cp "$d/findings" "$3"
+cat "$d/review" 2>/dev/null || echo "REVIEW result=APPROVED reason=existing_review pr=$1 head=$2 runs=0"
+exit "$(cat "$d/review.rc" 2>/dev/null || echo 0)"
+STUB
+chmod +x "$T/review"
 fail=0
 export CIW_GRACE_STEP=0 CIW_CONFLICT_STEP=0
 run_case() { # name expected_rc expected_result_regex
   local name=$1 erc=$2 ere=$3 out rc
-  out=$(CIW_TEST_DIR="$T/$name" CIW_GH="$T/gh" CIW_RERUN_CMD="$T/rerun" CIW_POLL_S=0 CIW_STATE_DIR="$T/$name/state" \
+  out=$(CIW_TEST_DIR="$T/$name" CIW_GH="$T/gh" CIW_RERUN_CMD="$T/rerun" CIW_REVIEW_HELPER="$T/review" CIW_POLL_S=0 CIW_STATE_DIR="$T/$name/state" \
         "$here/ci-wait-continue.sh" "${ARGS[@]}" 2>"$T/$name/stderr"); rc=$?
   if [ "$rc" = "$erc" ] && [[ $out =~ $ere ]]; then echo "PASS $name ($out)"; else echo "FAIL $name rc=$rc out=$out"; fail=1; fi
 }
@@ -164,5 +174,35 @@ ARGS=(pocketforge-os/x#5 $F7 TESTX_STATUS "$T/typo7real/msg" 5); run_case typo7r
 F6=${H:0:6}$(printf '9%.0s' {1..34})
 mk typo6 $H; printf 'a\tpass\t1m\t%s/1\n' $L >"$T/typo6/checks.0"
 ARGS=(pocketforge-os/x#5 $F6 TESTX_STATUS "$T/typo6/msg" 5); run_case typo6 3 'result=HEAD_MOVED'
+
+# 14 (2026-10-19, kernel-sunxi-7.x#114) GREEN: the driver reviews the exact head; approved -> MERGE_READY prompt, no
+#    "run the review" instruction, exactly one review call with pr/head
+[ "$(cat "$T/green/review.calls")" = "pocketforge-os/x#5 $H $T/green/msg.findings" ] && grep -q "state=HANDBACK reason=MERGE_READY pr=pocketforge-os/x#5 head=$H" "$T/green/msg" \
+  && grep -q 'Do NOT run another review' "$T/green/msg" && ! grep -q 'same-reviewer --continue re-look' "$T/green/msg" || { echo "FAIL green driver-review message/call"; fail=1; }
+# 14b review requests changes -> REVIEW_CHANGES (rc 0, so lane-drive forwards it), findings + the reviewer's head + the
+#     out-of-delta-to-beads rule in the prompt
+mk rvchg $H; printf 'a\tpass\t1m\t%s/1\n' $L >"$T/rvchg/checks.0"
+echo "REVIEW result=CHANGES reason=unresolved_conversations pr=pocketforge-os/x#5 head=$H runs=1" >"$T/rvchg/review"
+printf 'The reviewer saw exact head %s. Merge gate at that head: reason=unresolved_conversations.\n- sound/foo.c:12 by pocketforge-approver https://x\n    leaks the clk on the error path\n' $H >"$T/rvchg/findings"
+ARGS=(pocketforge-os/x#5 $H TESTX_STATUS "$T/rvchg/msg" 5); run_case rvchg 0 'result=REVIEW_CHANGES.*reason=unresolved_conversations'
+grep -q 'leaks the clk on the error path' "$T/rvchg/msg" && grep -q "reviewer saw exact head $H" "$T/rvchg/msg" && grep -q 'go to beads, never into the PR' "$T/rvchg/msg" \
+  && grep -q 'Do NOT run the reviewer yourself' "$T/rvchg/msg" && grep -q 'TESTX_STATUS state=CI_WAIT' "$T/rvchg/msg" || { echo "FAIL rvchg message content"; fail=1; }
+# 14c review failed / capped / head moved / quota (2026-10-25, review-at-head.sh rc 75 mapping) -> REVIEW_BLOCKED,
+# exit 3 (lane-drive exits to gpu-14), no lane message
+for c in reviewer_failed_fresh_rc2:admission_404 reviewer_quota_exhausted:gpt-5.6-luna review_cap head_moved_now_$H2; do
+  n=rvblk_${c%%[:_]*}_$RANDOM; mk "$n" $H; printf 'a\tpass\t1m\t%s/1\n' $L >"$T/$n/checks.0"
+  echo "REVIEW result=BLOCKED reason=$c pr=pocketforge-os/x#5 head=$H runs=2" >"$T/$n/review"; echo 3 >"$T/$n/review.rc"
+  ARGS=(pocketforge-os/x#5 $H TESTX_STATUS "$T/$n/msg" 5); run_case "$n" 3 "result=REVIEW_BLOCKED.*reason=$c"
+  [ ! -e "$T/$n/msg" ] || { echo "FAIL $n wrote a lane message"; fail=1; }
+done
+# 14d a helper that says APPROVED but exits non-zero is not trusted -> REVIEW_BLOCKED
+mk rvodd $H; printf 'a\tpass\t1m\t%s/1\n' $L >"$T/rvodd/checks.0"; echo 1 >"$T/rvodd/review.rc"
+ARGS=(pocketforge-os/x#5 $H TESTX_STATUS "$T/rvodd/msg" 5); run_case rvodd 3 'result=REVIEW_BLOCKED'
+# 14e CIW_REVIEW=0 rollback knob -> the pre-2026-10-19 lane-runs-review prompt, reviewer never called
+mk rvoff $H; printf 'a\tpass\t1m\t%s/1\n' $L >"$T/rvoff/checks.0"
+ARGS=(pocketforge-os/x#5 $H TESTX_STATUS "$T/rvoff/msg" 5); CIW_REVIEW=0 run_case rvoff 0 'result=GREEN'
+grep -q 'same-reviewer --continue re-look' "$T/rvoff/msg" && [ ! -e "$T/rvoff/review.calls" ] || { echo "FAIL rvoff legacy prompt"; fail=1; }
+# 14f RED never calls the reviewer (no review cost on red rounds)
+[ ! -e "$T/red/review.calls" ] || { echo "FAIL red called the reviewer"; fail=1; }
 
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "SOME FAILED"; exit 1; }

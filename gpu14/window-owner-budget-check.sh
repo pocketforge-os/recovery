@@ -45,6 +45,12 @@ if [ -z "$max" ]; then
   rows=$(awk -F'\t' -v r="$run" '$1==r{print $2}' "$R/run-bounds.tsv" 2>/dev/null | sort -u)
   if [ "$(printf '%s\n' "$rows" | grep -c .)" -gt 1 ]; then max="conflict:$(printf '%s' "$rows" | tr '\n' ',')"; else max=$rows; fi
 fi
+# 2026-10-24 gpu-14: v9 added (panel g6 pft-c17631bf, first v9 window owner, C7 UNKNOWN).
+# 2026-10-24 gpu-14: v10 added (release fd278158, tsp-mc9m.41.984.49.1.4).
+# 2026-10-19 gpu-14: v4 home (#1586): v4 dispatches set no max_messages; no admitted bound means no lifetime count.
+if { [ "$H" = /home/matt/.pf-task-v4 ] || [ "$H" = /home/matt/.pf-task-v5 ] || [ "$H" = /home/matt/.pf-task-v6 ] || [ "$H" = /home/matt/.pf-task-v7 ] || [ "$H" = /home/matt/.pf-task-v8 ] || [ "$H" = /home/matt/.pf-task-v9 ] || [ "$H" = /home/matt/.pf-task-v10 ]; } && [ -z "$max" ]; then
+  echo "WINDOW_OWNER_BUDGET result=NOT_APPLICABLE run=$run home=${H##*/.pf-task-} reason=no_lifetime_message_count"; exit 0
+fi
 case "$max" in conflict:*)
   echo "WINDOW_OWNER_BUDGET result=UNKNOWN run=$run used=${used:-?} max=$max source=$src need=$need hint=bounds disagree; read the admitted request and fix the records"; exit 2 ;;
 esac

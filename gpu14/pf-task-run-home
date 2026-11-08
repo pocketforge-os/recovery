@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""Resolve one managed run to exactly one allowlisted pf-task home."""
+"""Resolve a managed run to exactly one allowlisted pf-task control home."""
 
 import argparse
+import contextlib
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import shlex
+import sqlite3
 import subprocess
 import sys
 import time
@@ -15,52 +19,83 @@ import time
 
 RUN = re.compile(r"pft-[0-9a-f]{24}")
 REVISION = re.compile(r"[0-9a-f]{40}")
-DEFAULT_REGISTRY = Path("/home/matt/recovery/gpu14/run-homes.jsonl")
-DEFAULT_ALLOWLIST = [
-    {
-        "control_home": "/home/matt/.pf-task-v2",
-        "pf_task": "/home/matt/.pf-task-v2/bin/pf-task",
-        "host_config": "/home/matt/.config/pocketforge/pf-task-host.json",
-    },
-    {
-        "control_home": "/home/matt/.pf-task-v3",
-        "pf_task": "/home/matt/.local/libexec/pf-task-v3/pf-task",
-        "host_config": "/home/matt/.config/pocketforge/pf-task-v3/pf-task-host.json",
-    },
-    {
-        "control_home": "/home/matt/.pf-task",
-        "pf_task": "/home/matt/.local/bin/pf-task",
-        "host_config": "/home/matt/.config/pocketforge/pf-task-host.json",
-    },
-]
+GENERATION = re.compile(r"[0-9a-f]{32}")
+ROW_KEYS = ("run_id", "generation", "control_home", "pf_task", "host_config", "revision")
+# "disposition" is an optional historical migration label (v2, legacy).
+ROW_OPTIONAL = ("disposition",)
+TEST_ROOT = None
 
 
 class Refused(Exception):
-    pass
+    def __init__(self, reason, **detail):
+        super().__init__(reason)
+        self.detail = detail
 
 
-def refuse(reason):
-    raise Refused(reason)
+def refuse(reason, **detail):
+    raise Refused(reason, **detail)
+
+
+def account_home():
+    try:
+        value = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except (KeyError, OSError) as exc:
+        raise Refused("run_home_account_unavailable") from exc
+    if not value.is_absolute():
+        refuse("run_home_account_unavailable")
+    return value
+
+
+def state_root():
+    if TEST_ROOT is not None:
+        return TEST_ROOT / "state"
+    return account_home() / ".local/state"
+
+
+def config_root():
+    if TEST_ROOT is not None:
+        return TEST_ROOT / "config"
+    return account_home() / ".config"
 
 
 def registry_path():
-    return Path(os.environ.get("PF_TASK_RUN_HOME_REGISTRY", DEFAULT_REGISTRY))
+    return state_root() / "pocketforge/pf-task/run-homes.jsonl"
+
+
+def allowlist_path():
+    return config_root() / "pocketforge/pf-task-run-homes.json"
+
+
+def validate_home(value):
+    keys = ("control_home", "pf_task", "host_config")
+    if not isinstance(value, dict) or any(
+            not isinstance(value.get(key), str) or not value[key] for key in keys):
+        refuse("run_home_allowlist_invalid")
+    selected = {key: value[key] for key in keys}
+    if any(not Path(selected[key]).is_absolute() for key in keys):
+        refuse("run_home_allowlist_invalid")
+    return selected
 
 
 def allowlist():
-    override = os.environ.get("PF_TASK_RUN_HOME_ALLOWLIST")
+    path = allowlist_path()
     try:
-        values = json.loads(Path(override).read_text()) if override else DEFAULT_ALLOWLIST
+        if path.is_symlink() or not path.is_file():
+            refuse("run_home_allowlist_invalid")
+        info = path.stat()
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            refuse("run_home_allowlist_invalid")
+        values = json.loads(path.read_text())
+    except Refused:
+        raise
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise Refused("run_home_allowlist_invalid") from exc
     if not isinstance(values, list) or not values:
         refuse("run_home_allowlist_invalid")
-    keys = ("control_home", "pf_task", "host_config")
-    if any(not isinstance(item, dict) or any(
-            not isinstance(item.get(key), str) or not item[key] for key in keys)
-            for item in values):
+    homes = [validate_home(value) for value in values]
+    if len({json.dumps(value, sort_keys=True) for value in homes}) != len(homes):
         refuse("run_home_allowlist_invalid")
-    return values
+    return homes
 
 
 def validate_run(run_id):
@@ -72,31 +107,40 @@ def lock_path(path):
     return path.with_suffix(path.suffix + ".lock")
 
 
-def acquire_lock(fd, operation):
-    timeout = float(os.environ.get("PF_TASK_RUN_HOME_LOCK_TIMEOUT", "5"))
-    deadline = time.monotonic() + timeout
-    while True:
-        try:
-            fcntl.flock(fd, operation | fcntl.LOCK_NB)
-            return
-        except BlockingIOError:
-            if time.monotonic() >= deadline:
-                refuse("run_home_registry_lock_timeout")
-            time.sleep(0.05)
+def validate_row(value, number):
+    """The one schema for a registry record; any malformed record refuses.
+
+    Every reader (resolve, lookup, register, precheck and the binding
+    Control.run_start admission guard) loads rows through load_rows, so a
+    record that cannot be attributed to a home can never be skipped as clear.
+    """
+    reason = f"run_home_registry_row_invalid:{number}"
+    if not isinstance(value, dict) or not set(ROW_KEYS) <= set(value) \
+            or not set(value) <= set(ROW_KEYS + ROW_OPTIONAL):
+        refuse(reason)
+    if any(not isinstance(value[key], str) or not value[key] for key in set(value)):
+        refuse(reason)
+    if (RUN.fullmatch(value["run_id"]) is None or GENERATION.fullmatch(value["generation"]) is None
+            or REVISION.fullmatch(value["revision"]) is None
+            or any(not Path(value[key]).is_absolute()
+                   for key in ("control_home", "pf_task", "host_config"))):
+        refuse(reason)
+    return value
 
 
-def load_rows(path, *, locked=False):
+def load_rows(path, *, locked=False, may_be_absent=False):
+    if may_be_absent and not os.path.lexists(path):
+        return []
     if path.is_symlink() or not path.is_file():
         refuse("run_home_registry_unavailable")
-    stat = path.stat()
-    if not os.environ.get("PF_TASK_RUN_HOME_ALLOW_INSECURE_TEST_REGISTRY"):
-        if stat.st_uid != os.getuid() or stat.st_mode & 0o077:
-            refuse("run_home_registry_not_private")
-    fd = None
+    info = path.stat()
+    if info.st_uid != os.getuid() or info.st_mode & 0o077:
+        refuse("run_home_registry_not_private")
+    descriptor = None
     try:
         if not locked:
-            fd = os.open(lock_path(path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-            acquire_lock(fd, fcntl.LOCK_SH)
+            descriptor = os.open(lock_path(path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_SH)
         rows = []
         for number, line in enumerate(path.read_text().splitlines(), 1):
             if not line.strip():
@@ -107,35 +151,28 @@ def load_rows(path, *, locked=False):
                 raise Refused(f"run_home_registry_line_invalid:{number}") from exc
             if not isinstance(value, dict):
                 refuse(f"run_home_registry_line_invalid:{number}")
-            rows.append(value)
+            rows.append(validate_row(value, number))
         return rows
     except (OSError, UnicodeError) as exc:
         raise Refused("run_home_registry_unreadable") from exc
     finally:
-        if fd is not None:
-            os.close(fd)
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def canonical(row):
-    required = ("run_id", "generation", "control_home", "pf_task", "host_config", "revision")
-    if any(not isinstance(row.get(key), str) or not row[key] for key in required):
+    if not isinstance(row, dict) or any(not isinstance(row.get(key), str) for key in ROW_KEYS):
         refuse("run_home_registry_row_invalid")
     validate_run(row["run_id"])
     if REVISION.fullmatch(row["revision"]) is None:
         refuse("run_home_revision_invalid")
-    selected = {key: row[key] for key in required}
-    allowed = any(all(selected[key] == item[key] for key in
-                      ("control_home", "pf_task", "host_config"))
-                  for item in allowlist())
-    if not allowed:
+    selected = {key: row[key] for key in ROW_KEYS}
+    # register writes only rows that every later reader accepts.
+    validate_row(selected, "new")
+    if {key: selected[key] for key in ("control_home", "pf_task", "host_config")} not in allowlist():
         refuse("run_home_not_allowlisted")
     for key in ("control_home", "pf_task", "host_config"):
-        path = Path(selected[key])
-        if not path.is_absolute():
-            refuse("run_home_path_not_absolute")
-    for key in ("control_home", "pf_task", "host_config"):
-        path = Path(selected[key])
-        if not path.exists():
+        if not Path(selected[key]).exists():
             refuse("run_home_path_missing:" + key)
     return selected
 
@@ -150,8 +187,7 @@ def probe(row):
         try:
             result = subprocess.run(
                 [row["pf_task"], "--home", row["control_home"], "--role", "coordinator",
-                 "run.status", payload], env=env, text=True, capture_output=True,
-                timeout=timeout)
+                 "run.status", payload], env=env, text=True, capture_output=True, timeout=timeout)
             try:
                 value = json.loads(result.stdout)
             except json.JSONDecodeError:
@@ -159,8 +195,7 @@ def probe(row):
             if isinstance(value, dict) and value.get("status") == "refused":
                 refuse("run_home_positive_probe_refused")
             if result.returncode == 0 and isinstance(value, dict):
-                if (value.get("run_id") != row["run_id"]
-                        or value.get("generation") != row["generation"]):
+                if value.get("run_id") != row["run_id"] or value.get("generation") != row["generation"]:
                     refuse("run_home_positive_probe_identity_mismatch")
                 return row
         except Refused:
@@ -174,7 +209,7 @@ def probe(row):
 
 def lookup(run_id):
     validate_run(run_id)
-    rows = [canonical(row) for row in load_rows(registry_path()) if row.get("run_id") == run_id]
+    rows = [canonical(row) for row in load_rows(registry_path()) if row["run_id"] == run_id]
     unique = {json.dumps(row, sort_keys=True, separators=(",", ":")): row for row in rows}
     if not unique:
         refuse("run_home_unknown")
@@ -183,8 +218,122 @@ def lookup(run_id):
     return next(iter(unique.values()))
 
 
-def resolve(run_id):
-    return probe(lookup(run_id))
+def run_id_for(parent, key):
+    """The run_id Control.run_start derives for (parent, key).
+
+    This standalone resolver is deployed as a single copied file, so it cannot
+    import lib/pf_task. scripts/tests/pf-task-run-home-test.sh pins equality
+    against the expression control.py evaluates, so the two cannot drift.
+    """
+    value = json.dumps([parent, key], sort_keys=True, separators=(",", ":"))
+    return "pft-" + hashlib.sha256(value.encode()).hexdigest()[:24]
+
+
+def journal_holds(control_home, run_id):
+    """Read-only: does this home's journal hold an admission or run for run_id?
+
+    It reads only records(kind,id,body), the table every journal revision
+    carries, through a mode=ro query_only connection: no pf-task binary, no
+    migration, no liveness scan. An allowlisted home whose directory does not
+    exist holds no journal and is clear; any other failure refuses.
+    """
+    home = Path(control_home)
+    try:
+        home.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise Refused("run_home_other_home_unchecked", home=control_home) from exc
+    journal = home / "journal.sqlite3"
+    if journal.is_symlink() or not journal.is_file():
+        refuse("run_home_other_home_unchecked", home=control_home)
+    try:
+        db = sqlite3.connect(journal.as_uri() + "?mode=ro", uri=True, timeout=10)
+        try:
+            db.execute("PRAGMA query_only=ON")
+            row = db.execute("SELECT 1 FROM records WHERE kind IN ('run','admission') AND id=? LIMIT 1",
+                             (run_id,)).fetchone()
+        finally:
+            db.close()
+    except sqlite3.Error as exc:
+        raise Refused("run_home_other_home_unchecked", home=control_home) from exc
+    return row is not None
+
+
+def same_home(left, right):
+    return Path(left).resolve() == Path(right).resolve()
+
+
+def other_home_rows(rows, run_id, control_home):
+    return sorted({row["control_home"] for row in rows if row["run_id"] == run_id
+                   and not same_home(row["control_home"], control_home)})
+
+
+def cross_home_check(run_id, control_home, *, registry_may_be_absent=False, locked=False,
+                     homes=None):
+    """Refuse when run_id exists on any home other than control_home.
+
+    run_id is pft-+digest([parent,key]), with no home in it. Liveness matches a
+    runtime by run_id alone, so one (parent, key) on two homes would let each
+    home observe the other's runtime as its own. Same-home re-admission is not
+    this guard's concern and stays clear.
+    """
+    validate_run(run_id)
+    if homes is None:
+        homes = sorted({home["control_home"] for home in allowlist()})
+        if control_home not in homes:
+            refuse("run_home_not_allowlisted", home=control_home)
+    rows = load_rows(registry_path(), locked=locked, may_be_absent=registry_may_be_absent)
+    others = other_home_rows(rows, run_id, control_home)
+    if others:
+        refuse("run_id_registered_on_other_home", home=others[0], source="registry", run_id=run_id)
+    for home in homes:
+        if not same_home(home, control_home) and journal_holds(home, run_id):
+            refuse("run_id_registered_on_other_home", home=home, source="journal", run_id=run_id)
+    return {"status": "clear", "run_id": run_id, "control_home": control_home}
+
+
+@contextlib.contextmanager
+def admission_guard(run_id, control_home):
+    """The binding cross-home guard, held by Control.run_start (tsp-mc9m.41.995.130.2.1).
+
+    It takes the registry's exclusive lock, checks every other allowlisted
+    home's registry rows and journal, and stays held while the caller journals
+    the admission, so two homes can never both clear the same run_id. Without
+    an allowlist, or when the allowlist names no other home, there is nothing
+    to collide with and no lock is taken. When an allowlist exists, a home it
+    does not list refuses (run_home_not_allowlisted). Any unreadable state
+    refuses.
+    """
+    validate_run(run_id)
+    if not os.path.lexists(allowlist_path()):
+        yield {"status": "clear", "run_id": run_id, "checked": "no_allowlist"}
+        return
+    homes = sorted({home["control_home"] for home in allowlist()})
+    # An unlisted home would scan the listed ones, but they never scan it, so
+    # a later admission elsewhere could take the same run_id: refuse it.
+    if not any(same_home(home, control_home) for home in homes):
+        refuse("run_home_not_allowlisted", home=str(control_home))
+    if all(same_home(home, control_home) for home in homes):
+        yield {"status": "clear", "run_id": run_id, "checked": "no_other_home"}
+        return
+    path = registry_path()
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(lock_path(path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    except OSError as exc:
+        raise Refused("run_home_registry_unavailable") from exc
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield cross_home_check(run_id, str(control_home), registry_may_be_absent=True,
+                               locked=True, homes=homes)
+    finally:
+        os.close(descriptor)
+
+
+def precheck(args):
+    """Read-only dispatcher convenience; the binding guard is admission_guard."""
+    return cross_home_check(run_id_for(args.parent, args.key), args.control_home)
 
 
 def register(args):
@@ -196,12 +345,14 @@ def register(args):
     probe(row)
     path = registry_path()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    lock = lock_path(path)
-    fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    descriptor = os.open(lock_path(path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
-        acquire_lock(fd, fcntl.LOCK_EX)
-        rows = load_rows(path, locked=True) if path.exists() else []
-        same = [canonical(item) for item in rows if item.get("run_id") == row["run_id"]]
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        # The first register creates the registry; precheck requires it to exist.
+        cross_home_check(row["run_id"], row["control_home"], registry_may_be_absent=True,
+                         locked=True)
+        rows = load_rows(path, locked=True, may_be_absent=True)
+        same = [canonical(item) for item in rows if item["run_id"] == row["run_id"]]
         if same and any(item != row for item in same):
             refuse("run_home_ambiguous")
         if not same:
@@ -211,42 +362,55 @@ def register(args):
                 stream.flush()
                 os.fsync(stream.fileno())
     finally:
-        os.close(fd)
+        os.close(descriptor)
     return row
 
 
 def main():
+    global TEST_ROOT
     parser = argparse.ArgumentParser()
+    parser.add_argument("--test-root", type=Path, help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("resolve", "lookup"):
         selected = sub.add_parser(command)
         selected.add_argument("run_id")
         selected.add_argument("--format", choices=("json", "shell"), default="json")
-    register_p = sub.add_parser("register")
+    sub.add_parser("homes")
+    selected = sub.add_parser("register")
     for name in ("run_id", "generation", "control_home", "pf_task", "host_config", "revision"):
-        register_p.add_argument("--" + name.replace("_", "-"), required=True)
+        selected.add_argument("--" + name.replace("_", "-"), required=True)
+    selected = sub.add_parser(
+        "precheck", help="read-only dispatcher convenience; Control.run_start holds the binding guard")
+    for name in ("parent", "key", "control_home"):
+        selected.add_argument("--" + name.replace("_", "-"), required=True)
     args = parser.parse_args()
     try:
+        if args.test_root is not None:
+            if not args.test_root.is_absolute() or not args.test_root.is_dir():
+                refuse("run_home_test_root_invalid")
+            TEST_ROOT = args.test_root
         if args.command == "resolve":
-            value = resolve(args.run_id)
+            value = probe(lookup(args.run_id))
         elif args.command == "lookup":
             value = lookup(args.run_id)
+        elif args.command == "homes":
+            value = allowlist()
+        elif args.command == "precheck":
+            value = precheck(args)
         else:
             value = register(args)
         if args.command in ("resolve", "lookup") and args.format == "shell":
-            names = {
-                "H": value["control_home"], "PFT": value["pf_task"],
-                "PF_TASK_HOST_CONFIG": value["host_config"],
-                "RUN_GENERATION": value["generation"],
-                "RUN_HOME_REVISION": value["revision"],
-            }
+            names = {"H": value["control_home"], "PFT": value["pf_task"],
+                     "PF_TASK_HOST_CONFIG": value["host_config"],
+                     "RUN_GENERATION": value["generation"], "RUN_HOME_REVISION": value["revision"]}
             print("; ".join(f"{name}={shlex.quote(item)}" for name, item in names.items())
                   + "; export PF_TASK_HOST_CONFIG")
         else:
             print(json.dumps(value, sort_keys=True))
         return 0
     except Refused as exc:
-        print(json.dumps({"status": "refused", "reason": str(exc)}, sort_keys=True), file=sys.stderr)
+        print(json.dumps({**exc.detail, "status": "refused", "reason": str(exc)}, sort_keys=True),
+              file=sys.stderr)
         return 2
 
 
