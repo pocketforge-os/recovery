@@ -1,0 +1,18 @@
+[
+ {
+  "path": "/home/matt/programming/pocketforge-os/recovery",
+  "states": [
+   "ff_refused"
+  ],
+  "reason": "By design until tsp-mc9m.60.29.84.19: gpu-16/gpu-14 coordination tooling (gpu14/, gpu16/) lives untracked in this checkout, so a tracked incoming path that collides with it makes the ff-only refresh refuse. Any other skip state still alarms.",
+  "bead": "tsp-mc9m.60.29.84.19"
+ },
+ {
+  "path": "/home/matt/wt/pfa-main",
+  "states": [
+   "diverged"
+  ],
+  "reason": "Deploy pin, not a stale checkout: ~/.local/bin/pf-automation-tool loads scripts/lib/pf-driver-pin.sh from this worktree's HEAD (PF_DRIVER_PIN_REPO default). A refresh or reset would silently redeploy the driver-pin library. Advance it only as a deliberate deploy. Any other skip state still alarms.",
+  "bead": "tsp-mc9m.60.29.84.24"
+ }
+]

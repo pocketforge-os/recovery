@@ -3,3 +3,7 @@
 *.swp
 *~
 .DS_Store
+
+# Python bytecode (the live fleet board runs collect.py/render.py in place; untracked .pyc would dirty the shared checkout)
+__pycache__/
+*.pyc

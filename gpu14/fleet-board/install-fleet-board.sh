@@ -24,8 +24,9 @@ UNIT_DIR=${FB_UNIT_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}
 SYSTEMCTL=${SYSTEMCTL:-systemctl}
 TIMER=pf-fleet-board.timer
 # hardware-rows.json is the committed hardware-row catalog collect.py reads beside itself (HW_ROWS_FILE), so it ships
-# with the scripts.
-SCRIPTS=(collect.py render.py refresh.sh velocity.py hardware-rows.json)
+# with the scripts. shared-refresh-allow.json is the committed checkout-skip allowlist it also reads beside itself
+# (SHARED_REFRESH_ALLOW, 2026-11-03; a missing one voids every exception), so it ships too.
+SCRIPTS=(collect.py render.py refresh.sh velocity.py hardware-rows.json shared-refresh-allow.json)
 UNITS=(pf-fleet-board.service pf-fleet-board.timer)
 
 usage() { echo "usage: $0 --check|--apply" >&2; echo "fleet_board_install=fail reason=usage"; exit 2; }
