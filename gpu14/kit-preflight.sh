@@ -61,6 +61,7 @@ CHAIN=${KP_CHAIN:-$R/window-chain.sh}
 BUDGET=${KP_BUDGET:-$R/window-owner-budget-check.sh}
 DENY=${KP_DENYLIST:-$R/image-denylist.txt}
 PUB=${KP_PUBLISH_ROOT:-$R}
+IMAGE_PUB=${KP_IMAGE_PUB_DIR:-/var/lib/pocketforge/image-publications/sha256}
 STORE=${KP_ARTIFACT_BASE:-http://10.0.40.90:8790/artifacts/sha256}; STORE=${STORE%/}
 FAILED=(); OVERRIDES=(); RAW=""; IMAGE=""; C2_RECEIPT=""; C2_RECEIPT_SHA=""; PATHS_EXEMPT=0; CHAIN_PATHS_OK=""
 clean() { printf '%s' "$1" | tr -d '\r\n"' | tr '\t' ' ' | cut -c1-300; }
@@ -219,6 +220,19 @@ c2() {
   for c in "$(dirname "$img")"/receipt-*.json "$PUB"/build*-publish/receipt-*.json; do
     [ -f "$c" ] && grep -q "$RAW" "$c" 2>/dev/null && { receipt=$c; break; }
   done
+  # tsp-hqm1p.182.216: current images come through the image-publications store, not build*-publish (last: build55), so 19 of
+  # 23 preflights had no C2 receipt. Fallback only when nothing was found above: <store>/<dir>/full-image-receipt.json whose
+  # ImageSource.RawSHA256 equals the raw sha exactly (same match as bench-admit.py IMAGE_PUB_DIR). Symlinked dirs/files and
+  # unparsable entries are skipped, never followed.
+  if [ "$receipt" = none ] && [ -d "$IMAGE_PUB" ] && [ ! -L "$IMAGE_PUB" ]; then
+    for c in "$IMAGE_PUB"/*/full-image-receipt.json; do
+      [ -f "$c" ] && [ ! -L "$c" ] && [ ! -L "$(dirname "$c")" ] || continue
+      [ "$(stat -c %s "$c" 2>/dev/null || echo 99999999)" -le 1048576 ] || continue
+      if python3 -B -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if isinstance(d,dict) and isinstance(d.get("ImageSource"),dict) and d["ImageSource"].get("RawSHA256")==sys.argv[2] else 1)' "$c" "$RAW" 2>/dev/null; then
+        receipt=$c; break
+      fi
+    done
+  fi
   if [ "$receipt" != none ] && [ -f "$receipt" ] && [ ! -L "$receipt" ]; then
     C2_RECEIPT=$receipt; C2_RECEIPT_SHA=$(sha256sum < "$receipt" | cut -d' ' -f1)
   fi
