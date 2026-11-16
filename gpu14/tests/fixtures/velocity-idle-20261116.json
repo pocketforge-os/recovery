@@ -1,0 +1,1096 @@
+{
+ "_provenance": "Frozen from live records on 2026-11-16 (the state behind runs/bench-idle-analysis-20261116.md): kit-windows boot-open/failed/terminal/revoked/active records from 2026-11-15T04:06Z to now, the forceoff-cap clearance record, relay.log RELAYED lines, info.log SEALED_ORDERED/AUTO_SEAL_LAUNCHED lines and relay-sent.json window_request rows over the same span. Paths and unrelated fields are stripped; times are kept to the millisecond because mtimes carry the failure and terminal write times the classification depends on.",
+ "boot_opens": [
+  {
+   "gen": "1569a27c70e7bcf9a5a1591053ff4b29",
+   "opened_at": "2026-11-15T07:02:37Z",
+   "request_at": "2026-11-15T06:44:57.549Z",
+   "revoked_at": "2026-11-15T07:15:48Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": "2026-11-15T07:16:14Z",
+    "mtime": "2026-11-15T07:18:56.181Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "1a4b69dcf30dfc4a5a03d7a0c1df25be",
+   "opened_at": "2026-11-15T16:21:10Z",
+   "request_at": "2026-11-15T16:08:20.666Z",
+   "revoked_at": "2026-11-15T16:25:12Z",
+   "sha": "e3c976f76cd6b2e6a5ca0209e6d32c7ba0cc30af",
+   "terminal": {
+    "closed_at": "2026-11-15T16:25:38Z",
+    "mtime": "2026-11-15T16:28:21.540Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "1ad04a87bce0d5d14d456d9d45fc6c86",
+   "opened_at": "2026-11-15T05:04:10Z",
+   "request_at": "2026-11-15T04:46:48.770Z",
+   "revoked_at": "2026-11-15T05:14:05Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": null,
+    "mtime": "2026-11-15T05:17:17.078Z",
+    "reason": "failure",
+    "state": "failed"
+   }
+  },
+  {
+   "failed": {
+    "at": "2026-11-16T04:20:21Z",
+    "mtime": "2026-11-16T04:37:13.087Z"
+   },
+   "gen": "1d1259465f55dd72865715c0bcce1f84",
+   "request_at": "2026-11-16T04:20:28.539Z",
+   "sha": "9714e64673e5a4584273ce81ff874b9240b4d874"
+  },
+  {
+   "gen": "24e20600965e9a7d6c84716af699b60a",
+   "opened_at": "2026-11-16T15:23:29Z",
+   "request_at": "2026-11-16T15:10:36.649Z",
+   "revoked_at": "2026-11-16T15:35:25Z",
+   "sha": "fbf246225f9c67c430c0c9391a831446e2355e12",
+   "terminal": {
+    "closed_at": "2026-11-16T15:36:09Z",
+    "mtime": "2026-11-16T15:38:54.320Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "29a20b38be22090ce37808da3eba20af",
+   "opened_at": "2026-11-15T23:45:36Z",
+   "request_at": "2026-11-15T23:26:29.809Z",
+   "revoked_at": "2026-11-16T00:13:24Z",
+   "sha": "c8b6e8b1b6f9c800bc0450d77d3adf7a94b887d9",
+   "terminal": {
+    "closed_at": "2026-11-16T00:13:53Z",
+    "mtime": "2026-11-16T00:16:34.176Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "2a0a583f17229a4e3cb20c8c59b85a3f",
+   "opened_at": "2026-11-16T00:30:11Z",
+   "request_at": "2026-11-16T00:17:49.423Z",
+   "revoked_at": "2026-11-16T00:32:33Z",
+   "sha": "c8b6e8b1b6f9c800bc0450d77d3adf7a94b887d9",
+   "terminal": {
+    "closed_at": "2026-11-16T00:32:59Z",
+    "mtime": "2026-11-16T00:35:41.446Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "2f26321378f7a336697dabfd0d51604a",
+   "opened_at": "2026-11-15T09:33:13Z",
+   "request_at": "2026-11-15T09:15:56.764Z",
+   "revoked_at": "2026-11-15T09:36:12Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": "2026-11-15T09:36:38Z",
+    "mtime": "2026-11-15T09:39:21.767Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "failed": {
+    "at": "2026-11-16T01:09:33Z",
+    "mtime": "2026-11-16T01:25:54.287Z"
+   },
+   "gen": "30f94257d51cb1b0964f356885f73e7d",
+   "request_at": "2026-11-16T01:09:37.759Z",
+   "sha": "c8b6e8b1b6f9c800bc0450d77d3adf7a94b887d9"
+  },
+  {
+   "gen": "328c5bdd3c18b35f9993aada3baa9f1d",
+   "opened_at": "2026-11-15T09:57:20Z",
+   "request_at": "2026-11-15T09:44:07.094Z",
+   "revoked_at": "2026-11-15T10:08:38Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": null,
+    "mtime": "2026-11-15T10:11:56.768Z",
+    "reason": "lane_done",
+    "state": "failed"
+   }
+  },
+  {
+   "gen": "35d562c47b19df87a14090231fea62ff",
+   "opened_at": "2026-11-16T12:29:23Z",
+   "request_at": "2026-11-16T12:11:50.118Z",
+   "revoked_at": "2026-11-16T12:40:25Z",
+   "sha": "9714e64673e5a4584273ce81ff874b9240b4d874",
+   "terminal": {
+    "closed_at": "2026-11-16T12:40:57Z",
+    "mtime": "2026-11-16T12:43:40.854Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "3c83c825ddfa1e281bf502bae98f03cb",
+   "opened_at": "2026-11-15T15:01:41Z",
+   "request_at": "2026-11-15T14:44:08.913Z",
+   "revoked_at": "2026-11-15T15:28:52Z",
+   "sha": "e3c976f76cd6b2e6a5ca0209e6d32c7ba0cc30af",
+   "terminal": {
+    "closed_at": "2026-11-15T15:29:17Z",
+    "mtime": "2026-11-15T15:31:59.071Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "failed": {
+    "at": "2026-11-15T14:02:36Z",
+    "mtime": "2026-11-15T14:08:21.592Z"
+   },
+   "gen": "4890060e48eedfd4d5adf83dfee48f24",
+   "request_at": "2026-11-15T14:02:45.558Z",
+   "sha": "e3c976f76cd6b2e6a5ca0209e6d32c7ba0cc30af"
+  },
+  {
+   "gen": "4ad0fb71557edafa3170e7962830383f",
+   "opened_at": "2026-11-15T23:03:22Z",
+   "request_at": "2026-11-15T22:51:18.590Z",
+   "revoked_at": "2026-11-15T23:19:01Z",
+   "sha": "c8b6e8b1b6f9c800bc0450d77d3adf7a94b887d9",
+   "terminal": {
+    "closed_at": null,
+    "mtime": "2026-11-15T23:22:19.099Z",
+    "reason": "lane_done",
+    "state": "failed"
+   }
+  },
+  {
+   "gen": "4f515516a66cbbce05c557fefde20be3",
+   "opened_at": "2026-11-15T18:07:09Z",
+   "request_at": "2026-11-15T17:55:22.003Z",
+   "revoked_at": "2026-11-15T18:19:20Z",
+   "sha": "5eeb66cc01d375fd459870ab62bb030a009f3a29",
+   "terminal": {
+    "closed_at": null,
+    "mtime": "2026-11-15T18:22:38.476Z",
+    "reason": "lane_done",
+    "state": "failed"
+   }
+  },
+  {
+   "gen": "5ccba858bcd8a65cf5239c61390711c7",
+   "opened_at": "2026-11-15T09:01:41Z",
+   "request_at": "2026-11-15T08:43:55.204Z",
+   "revoked_at": "2026-11-15T09:11:08Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": "2026-11-15T09:11:35Z",
+    "mtime": "2026-11-15T09:14:15.831Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "643bf462e7dc9fb4ca096f7cbd985f7e",
+   "opened_at": "2026-11-15T12:54:51Z",
+   "request_at": "2026-11-15T12:43:18.062Z",
+   "revoked_at": "2026-11-15T12:55:48Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": "2026-11-15T12:55:56Z",
+    "mtime": "2026-11-15T12:58:40.500Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "645c45f0fd4c93a67696db350e36a4f8",
+   "opened_at": "2026-11-15T05:32:48Z",
+   "request_at": "2026-11-15T05:19:17.103Z",
+   "revoked_at": "2026-11-15T05:34:45Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": "2026-11-15T05:35:05Z",
+    "mtime": "2026-11-15T05:37:46.786Z",
+    "reason": "failure",
+    "state": "closed"
+   }
+  },
+  {
+   "failed": {
+    "at": "2026-11-15T10:40:06Z",
+    "mtime": "2026-11-15T10:58:32.931Z"
+   },
+   "gen": "651e3c8228d3d1663e79a5c7ec7ad2c3",
+   "request_at": "2026-11-15T10:40:13.110Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676"
+  },
+  {
+   "gen": "692f0f276f9b8b44e4b69acc17da5d65",
+   "opened_at": "2026-11-16T14:41:07Z",
+   "request_at": "2026-11-16T14:23:31.831Z",
+   "revoked_at": "2026-11-16T15:05:11Z",
+   "sha": "fbf246225f9c67c430c0c9391a831446e2355e12",
+   "terminal": {
+    "closed_at": "2026-11-16T15:05:39Z",
+    "mtime": "2026-11-16T15:08:25.362Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "6ef6255e1bc900e521d46b7ac2694922",
+   "opened_at": "2026-11-15T15:52:01Z",
+   "request_at": "2026-11-15T15:34:13.945Z",
+   "revoked_at": "2026-11-15T16:03:39Z",
+   "sha": "e3c976f76cd6b2e6a5ca0209e6d32c7ba0cc30af",
+   "terminal": {
+    "closed_at": "2026-11-15T16:03:58Z",
+    "mtime": "2026-11-15T16:06:42.646Z",
+    "reason": "timeout",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "71a5faa45f3306a17e4c302443907f41",
+   "opened_at": "2026-11-15T21:22:53Z",
+   "request_at": "2026-11-15T21:05:29.861Z",
+   "revoked_at": "2026-11-15T21:50:41Z",
+   "sha": "5eeb66cc01d375fd459870ab62bb030a009f3a29",
+   "terminal": {
+    "closed_at": "2026-11-15T21:51:08Z",
+    "mtime": "2026-11-15T21:53:52.261Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "745f17e36c84f38c9d4c1a2db45544ad",
+   "opened_at": "2026-11-15T17:49:45Z",
+   "request_at": "2026-11-15T17:38:18.098Z",
+   "revoked_at": "2026-11-15T17:51:13Z",
+   "sha": "5eeb66cc01d375fd459870ab62bb030a009f3a29",
+   "terminal": {
+    "closed_at": "2026-11-15T17:51:22Z",
+    "mtime": "2026-11-15T17:54:11.547Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "failed": {
+    "at": "2026-11-15T20:09:31Z",
+    "mtime": "2026-11-15T20:26:04.105Z"
+   },
+   "gen": "78d40f801570992c0cc257031cee23de",
+   "request_at": "2026-11-15T20:09:38.124Z",
+   "sha": "5eeb66cc01d375fd459870ab62bb030a009f3a29"
+  },
+  {
+   "gen": "8403354ced7fe7fdf6c3bbcb4b923d7a",
+   "opened_at": "2026-11-15T22:43:09Z",
+   "request_at": "2026-11-15T22:30:23.078Z",
+   "revoked_at": "2026-11-15T22:46:42Z",
+   "sha": "c8b6e8b1b6f9c800bc0450d77d3adf7a94b887d9",
+   "terminal": {
+    "closed_at": "2026-11-15T22:47:08Z",
+    "mtime": "2026-11-15T22:49:53.883Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "84399baa81cb03e8849d6042737774b4",
+   "opened_at": "2026-11-15T19:14:14Z",
+   "request_at": "2026-11-15T18:55:21.639Z",
+   "revoked_at": "2026-11-15T19:34:12Z",
+   "sha": "5eeb66cc01d375fd459870ab62bb030a009f3a29",
+   "terminal": {
+    "closed_at": null,
+    "mtime": "2026-11-15T19:37:25.655Z",
+    "reason": "failure",
+    "state": "failed"
+   }
+  },
+  {
+   "gen": "85c6edeadf68d44a86c872d999e8bc11",
+   "opened_at": "2026-11-15T12:04:27Z",
+   "request_at": "2026-11-15T11:47:03.212Z",
+   "revoked_at": "2026-11-15T12:16:07Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": "2026-11-15T12:16:27Z",
+    "mtime": "2026-11-15T12:19:11.150Z",
+    "reason": "timeout",
+    "state": "closed"
+   }
+  },
+  {
+   "failed": {
+    "at": "2026-11-15T07:20:05Z",
+    "mtime": "2026-11-15T07:25:47.554Z"
+   },
+   "gen": "93784300198d7d0517c071d02bb18380",
+   "request_at": "2026-11-15T07:20:13.155Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676"
+  },
+  {
+   "gen": "953e09ef3a4aa6c9661f8199fb52d281",
+   "opened_at": "2026-11-15T12:34:36Z",
+   "request_at": "2026-11-15T12:20:43.543Z",
+   "revoked_at": "2026-11-15T12:38:42Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": "2026-11-15T12:39:09Z",
+    "mtime": "2026-11-15T12:41:50.621Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "977a8ccc3d527da7ddb404bae3158e9b",
+   "opened_at": "2026-11-16T02:37:38Z",
+   "request_at": "2026-11-16T02:25:22.255Z",
+   "revoked_at": "2026-11-16T02:44:16Z",
+   "sha": "cf18a29fd8ef5042dd15768c66ad0b208259c723",
+   "terminal": {
+    "closed_at": "2026-11-16T02:44:44Z",
+    "mtime": "2026-11-16T02:47:28.332Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "98661f380b576de02b817c737c830788",
+   "opened_at": "2026-11-15T04:40:59Z",
+   "request_at": "2026-11-15T04:23:42.478Z",
+   "revoked_at": "2026-11-15T04:42:42Z",
+   "sha": "83f52e3cb7ef3aeda319739ca6909ff93617580e",
+   "terminal": {
+    "closed_at": "2026-11-15T04:43:06Z",
+    "mtime": "2026-11-15T04:45:44.651Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "a00054e5f7e90786088115974efcd4f2",
+   "opened_at": "2026-11-16T01:45:29Z",
+   "request_at": "2026-11-16T01:28:10.364Z",
+   "revoked_at": "2026-11-16T02:12:32Z",
+   "sha": "c8b6e8b1b6f9c800bc0450d77d3adf7a94b887d9",
+   "terminal": {
+    "closed_at": "2026-11-16T02:13:02Z",
+    "mtime": "2026-11-16T02:15:41.593Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "a49612537aae9d6c22ac9b0d763de5cd",
+   "opened_at": "2026-11-16T11:31:05Z",
+   "request_at": "2026-11-16T11:13:40.136Z",
+   "revoked_at": "2026-11-16T12:05:16Z",
+   "sha": "9714e64673e5a4584273ce81ff874b9240b4d874",
+   "terminal": {
+    "closed_at": "2026-11-16T12:06:13Z",
+    "mtime": "2026-11-16T12:08:56.429Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "a6a97e23d087e192614c1b24d5f3e1be",
+   "opened_at": "2026-11-16T13:48:26Z",
+   "request_at": "2026-11-16T13:30:53.325Z",
+   "revoked_at": "2026-11-16T14:12:07Z",
+   "sha": "925eeef490955de75d9ec331469c51ab3b3e856e",
+   "terminal": {
+    "closed_at": "2026-11-16T14:12:46Z",
+    "mtime": "2026-11-16T14:15:34.845Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "bcc65ed75ededc9291e2b8c1e8ab8b6b",
+   "opened_at": "2026-11-16T00:48:24Z",
+   "request_at": "2026-11-16T00:37:01.223Z",
+   "revoked_at": "2026-11-16T01:05:14Z",
+   "sha": "c8b6e8b1b6f9c800bc0450d77d3adf7a94b887d9",
+   "terminal": {
+    "closed_at": "2026-11-16T01:05:28Z",
+    "mtime": "2026-11-16T01:08:28.170Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "bdd7c3c0bec04357c2c2cec3e5c022ce",
+   "opened_at": "2026-11-16T15:58:10Z",
+   "request_at": "2026-11-16T15:43:36.807Z",
+   "revoked_at": "2026-11-16T16:29:47Z",
+   "sha": "fbf246225f9c67c430c0c9391a831446e2355e12",
+   "terminal": {
+    "closed_at": "2026-11-16T16:30:14Z",
+    "mtime": "2026-11-16T16:33:06.269Z",
+    "reason": "timeout",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "bf42fa9717c2842176a7c14e12afd8b3",
+   "opened_at": "2026-11-15T08:17:10Z",
+   "request_at": "2026-11-15T07:59:43.983Z",
+   "revoked_at": "2026-11-15T08:19:06Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": "2026-11-15T08:19:30Z",
+    "mtime": "2026-11-15T08:22:12.530Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "c10863eb37d4681c178af04dcc842bc8",
+   "opened_at": "2026-11-16T03:06:34Z",
+   "request_at": "2026-11-16T02:48:40.402Z",
+   "revoked_at": "2026-11-16T03:33:37Z",
+   "sha": "cf18a29fd8ef5042dd15768c66ad0b208259c723",
+   "terminal": {
+    "closed_at": "2026-11-16T03:34:04Z",
+    "mtime": "2026-11-16T03:36:44.212Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "c1d0b8f9cd0de12e6fab3a3efcf87f15",
+   "opened_at": "2026-11-15T06:38:26Z",
+   "request_at": "2026-11-15T06:21:01.684Z",
+   "revoked_at": "2026-11-15T06:40:29Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": "2026-11-15T06:40:54Z",
+    "mtime": "2026-11-15T06:43:36.660Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "c542c1205c5ea74c1c9f9f3fcf1a9c44",
+   "opened_at": "2026-11-15T06:07:32Z",
+   "request_at": "2026-11-15T05:50:02.778Z",
+   "revoked_at": "2026-11-15T06:16:35Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": "2026-11-15T06:17:09Z",
+    "mtime": "2026-11-15T06:19:48.216Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "c6fa3db969d6bcfbc0632f6f17b065ca",
+   "opened_at": "2026-11-15T08:35:34Z",
+   "request_at": "2026-11-15T08:23:18.001Z",
+   "revoked_at": "2026-11-15T08:39:28Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": "2026-11-15T08:39:53Z",
+    "mtime": "2026-11-15T08:42:34.274Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "c77f5d43c816c29ef39e6a590766580f",
+   "opened_at": "2026-11-15T16:46:51Z",
+   "request_at": "2026-11-15T16:29:37.234Z",
+   "revoked_at": "2026-11-15T17:17:28Z",
+   "sha": "e3c976f76cd6b2e6a5ca0209e6d32c7ba0cc30af",
+   "terminal": {
+    "closed_at": "2026-11-15T17:17:50Z",
+    "mtime": "2026-11-15T17:20:31.753Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "cca4af044c9a387674c94f66db81ae11",
+   "opened_at": "2026-11-16T03:57:01Z",
+   "request_at": "2026-11-16T03:39:44.309Z",
+   "revoked_at": "2026-11-16T04:04:37Z",
+   "sha": "cf18a29fd8ef5042dd15768c66ad0b208259c723",
+   "terminal": {
+    "closed_at": "2026-11-16T04:04:57Z",
+    "mtime": "2026-11-16T04:07:44.061Z",
+    "reason": "failure",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "d39e0992ccf3a27e8c2840d4bb76571e",
+   "opened_at": "2026-11-15T20:39:29Z",
+   "request_at": "2026-11-15T20:28:07.304Z",
+   "revoked_at": "2026-11-15T21:00:29Z",
+   "sha": "5eeb66cc01d375fd459870ab62bb030a009f3a29",
+   "terminal": {
+    "closed_at": "2026-11-15T21:00:31Z",
+    "mtime": "2026-11-15T21:03:01.724Z",
+    "reason": "timeout",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "dad1477b4c6217831998b90912b7861d",
+   "opened_at": "2026-11-15T11:19:16Z",
+   "request_at": "2026-11-15T11:01:20.204Z",
+   "revoked_at": "2026-11-15T11:42:12Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": "2026-11-15T11:42:42Z",
+    "mtime": "2026-11-15T11:45:25.332Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "dd8673961b72fc7921e3eadc2998e52b",
+   "opened_at": "2026-11-16T13:04:15Z",
+   "request_at": "2026-11-16T12:51:29.555Z",
+   "revoked_at": "2026-11-16T13:20:43Z",
+   "sha": "65d41b02af0a962c916b650c2972a2e21dd99fd9",
+   "terminal": {
+    "closed_at": "2026-11-16T13:22:00Z",
+    "mtime": "2026-11-16T13:24:46.262Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "decfdbbb69f13c45d12b4be449638a3e",
+   "opened_at": "2026-11-15T13:17:14Z",
+   "request_at": "2026-11-15T12:59:51.315Z",
+   "revoked_at": "2026-11-15T13:38:11Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": "2026-11-15T13:38:37Z",
+    "mtime": "2026-11-15T13:41:17.503Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "dfb626fda7feb73e31905fcd46e058c5",
+   "opened_at": "2026-11-15T20:00:30Z",
+   "request_at": "2026-11-15T19:46:53.057Z",
+   "revoked_at": "2026-11-15T20:04:27Z",
+   "sha": "5eeb66cc01d375fd459870ab62bb030a009f3a29",
+   "terminal": {
+    "closed_at": "2026-11-15T20:04:58Z",
+    "mtime": "2026-11-15T20:07:41.630Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "e0b0412435b9d498844d4a1561bcef23",
+   "opened_at": "2026-11-15T07:50:18Z",
+   "request_at": "2026-11-15T07:32:56.264Z",
+   "revoked_at": "2026-11-15T07:54:16Z",
+   "sha": "c30f561516b8d63c173ce3ec685bd5e673f6e676",
+   "terminal": {
+    "closed_at": "2026-11-15T07:54:43Z",
+    "mtime": "2026-11-15T07:58:18.705Z",
+    "reason": "lane_done",
+    "state": "closed"
+   }
+  },
+  {
+   "gen": "f34105336ad695f3d51cfd8959ae55d8",
+   "opened_at": "2026-11-15T14:28:04Z",
+   "request_at": "2026-11-15T14:10:44.345Z",
+   "revoked_at": "2026-11-15T14:39:37Z",
+   "sha": "e3c976f76cd6b2e6a5ca0209e6d32c7ba0cc30af",
+   "terminal": {
+    "closed_at": "2026-11-15T14:39:57Z",
+    "mtime": "2026-11-15T14:42:41.855Z",
+    "reason": "timeout",
+    "state": "closed"
+   }
+  }
+ ],
+ "clearance": {
+  "forceoff-cap-clearance-2026-11-16-01.json": {
+   "ClearedAt": "2026-11-16T11:11:49Z",
+   "Day": "2026-11-16",
+   "Generations": [
+    "1d1259465f55dd72865715c0bcce1f84",
+    "30f94257d51cb1b0964f356885f73e7d"
+   ],
+   "HaltReason": "forceoff_daily_cap",
+   "Schema": "pocketforge.kit-window-forceoff-cap-clearance/v1",
+   "Sequence": 1,
+   "State": "cleared"
+  }
+ },
+ "info_log": [
+  "2026-11-15T06:56:08Z EVENT run=PLAY9 pft-36165cba8fafe6f75f4aaca2 SEALED_ORDERED result=PASS reason=ordered gen=bf42fa9717c2842176a7c14e12afd8b3 req_sha=352fbe58a5dafb98f35be45984107e569d12a5c522fabfb831f57a325079d3cd lane=PLAY9 bench=pft-46d6e7482d785e2e882d6156",
+  "2026-11-15T08:29:13Z EVENT run=PLAY9 pft-36165cba8fafe6f75f4aaca2 SEALED_ORDERED result=PASS reason=ordered gen=2f26321378f7a336697dabfd0d51604a req_sha=a55a8afa8f631852a79e23e628cdfa919dcd850d1d4055d090cf29e2459411d6 lane=PLAY9 bench=pft-46d6e7482d785e2e882d6156",
+  "2026-11-15T10:09:48Z EVENT run=PLAY9 pft-36165cba8fafe6f75f4aaca2 SEALED_ORDERED result=PASS reason=ordered gen=85c6edeadf68d44a86c872d999e8bc11 req_sha=bc05c5bb7705f6706b2c2809e58edd3d89a9abefac7f53ed699a9fdd55b58976 lane=PLAY9 bench=pft-46d6e7482d785e2e882d6156",
+  "2026-11-15T14:02:03Z EVENT run=PLAY9 pft-36165cba8fafe6f75f4aaca2 SEALED_ORDERED result=PASS reason=ordered gen=f34105336ad695f3d51cfd8959ae55d8 req_sha=fee1e8b97c039a07017a70beb5524bc0ae984be3359f3f4c1a47c72a54ed4d04 lane=PLAY9 bench=pft-46d6e7482d785e2e882d6156",
+  "2026-11-15T14:51:03Z EVENT run=PLAY9 pft-36165cba8fafe6f75f4aaca2 SEALED_ORDERED result=PASS reason=ordered gen=6ef6255e1bc900e521d46b7ac2694922 req_sha=5b0f6eb86e46129d75e4f277e4d9eb2f37b4c17eecc515dd3042d086d5cfc724 lane=PLAY9 bench=pft-46d6e7482d785e2e882d6156",
+  "2026-11-15T17:54:07Z EVENT run=PLAY9 pft-36165cba8fafe6f75f4aaca2 SEALED_ORDERED result=PASS reason=ordered gen=a36844fcd276e18291dce4c4058fdc94 req_sha=6331c90702a3da6735b2ffbc6d926d90d987074c4556dc71eff10e36e59c0e7a lane=PLAY9 bench=pft-46d6e7482d785e2e882d6156",
+  "2026-11-16T07:58:00Z AUTO_SEAL_LAUNCHED lane=DISP1 run=pft-7d6b5ef00fe2e54a3859157e receipt=receipt-e4ba7b4ccd454fff88354133 sha256=4f455f24a5a2 (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T09:08:19Z AUTO_SEAL_LAUNCHED lane=MEDIA1 run=pft-5f7bfdbdfe12cefd2bff90eb receipt=receipt-3e5f90cf0b9c3c7756c4028c sha256=5837a3a6dfc4 (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T09:08:57Z SEALED_ORDERED lane=MEDIA1 run=pft-5f7bfdbdfe12cefd2bff90eb gen=35d562c4 after=a4961253 sha256=5837a3a6dfc4 (auto seal; gpu-16 not woken)",
+  "2026-11-16T10:57:00Z AUTO_SEAL_LAUNCHED lane=PM1 run=pft-52d3de784f31094f45653f73 receipt=receipt-fa70cd029826760ea613538d sha256=3b3686f0310b (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T11:14:28Z AUTO_SEAL_LAUNCHED lane=MEDIA1 run=pft-5f7bfdbdfe12cefd2bff90eb receipt=receipt-e349e0d234c5ab17bd905db6 sha256=8188740cb02b (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T11:15:54Z SEALED_ORDERED lane=MEDIA1 run=pft-5f7bfdbdfe12cefd2bff90eb gen=dd867396 after=35d562c4 sha256=8188740cb02b (auto seal; gpu-16 not woken)",
+  "2026-11-16T12:05:37Z AUTO_SEAL_LAUNCHED lane=DISP1 run=pft-7d6b5ef00fe2e54a3859157e receipt=receipt-c358714146abc36a0e84a763 sha256=8ead042b8345 (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T12:05:42Z AUTO_SEAL_LAUNCHED lane=PM1 run=pft-52d3de784f31094f45653f73 receipt=receipt-de4c54c286e80a020afec988 sha256=06fd0e74ace3 (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T13:15:23Z AUTO_SEAL_LAUNCHED lane=POWER8 run=pft-9ff7268f2fc51a176506ad73 receipt=receipt-27559609dbdc2d80004958d6 sha256=61d05e8d4d7a (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T13:17:22Z SEALED_ORDERED lane=POWER8 run=pft-9ff7268f2fc51a176506ad73 gen=a6a97e23 after=dd867396 sha256=61d05e8d4d7a (auto seal; gpu-16 not woken)",
+  "2026-11-16T13:29:34Z AUTO_SEAL_LAUNCHED lane=MEDIA1 run=pft-5f7bfdbdfe12cefd2bff90eb receipt=receipt-24c3a8152e2b619b417f0c19 sha256=15df42f2c636 (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T13:31:44Z SEALED_ORDERED lane=MEDIA1 run=pft-5f7bfdbdfe12cefd2bff90eb gen=692f0f27 after=a6a97e23 sha256=15df42f2c636 (auto seal; gpu-16 not woken)",
+  "2026-11-16T14:13:08Z AUTO_SEAL_LAUNCHED lane=DISP1 run=pft-7d6b5ef00fe2e54a3859157e receipt=receipt-f1966044b8f7dff04e3138bc sha256=3eac26a6a05e (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T14:13:12Z AUTO_SEAL_LAUNCHED lane=PM1 run=pft-52d3de784f31094f45653f73 receipt=receipt-0486904e37efbf5ffe1fd267 sha256=bc4d0fe23fdc (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T14:14:40Z SEALED_ORDERED lane=DISP1 run=pft-7d6b5ef00fe2e54a3859157e gen=24e20600 after=692f0f27 sha256=3eac26a6a05e (auto seal; gpu-16 not woken)",
+  "2026-11-16T14:16:38Z SEALED_ORDERED lane=PM1 run=pft-52d3de784f31094f45653f73 gen=bdd7c3c0 after=24e20600 sha256=bc4d0fe23fdc (auto seal; gpu-16 not woken)",
+  "2026-11-16T14:21:45Z AUTO_SEAL_LAUNCHED lane=PM1 run=pft-52d3de784f31094f45653f73 receipt=receipt-976c8396ca97688a1e509538 sha256=d0471d489ae2 (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T14:22:50Z SEALED_ORDERED lane=PM1 run=pft-52d3de784f31094f45653f73 gen=cfa7ba0c after=bdd7c3c0 sha256=d0471d489ae2 (auto seal; gpu-16 not woken)",
+  "2026-11-16T14:25:50Z AUTO_SEAL_LAUNCHED lane=PM1 run=pft-52d3de784f31094f45653f73 receipt=receipt-4d5b366c67b8e127f317bf7f sha256=9dc8242d5008 (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T14:26:41Z SEALED_ORDERED lane=PM1 run=pft-52d3de784f31094f45653f73 gen=feed84b9 after=cfa7ba0c sha256=9dc8242d5008 (auto seal; gpu-16 not woken)",
+  "2026-11-16T14:27:19Z AUTO_SEAL_LAUNCHED lane=PM1 run=pft-52d3de784f31094f45653f73 receipt=receipt-11c7759eaaef02ac99806609 sha256=d3ba98ce5383 (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T14:28:16Z SEALED_ORDERED lane=PM1 run=pft-52d3de784f31094f45653f73 gen=a664f8f8 after=feed84b9 sha256=d3ba98ce5383 (auto seal; gpu-16 not woken)",
+  "2026-11-16T15:07:14Z AUTO_SEAL_LAUNCHED lane=PLAY9 run=pft-36165cba8fafe6f75f4aaca2 receipt=receipt-a97ddd8df9a2b1a8cd6b5059 sha256=76ba8435de02 (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T15:07:51Z SEALED_ORDERED lane=PLAY9 run=pft-36165cba8fafe6f75f4aaca2 gen=020e6c42 after=a664f8f8 sha256=76ba8435de02 (auto seal; gpu-16 not woken)",
+  "2026-11-16T15:22:35Z AUTO_SEAL_LAUNCHED lane=MEDIA1 run=pft-5f7bfdbdfe12cefd2bff90eb receipt=receipt-9c2c9051e8aa81a2ba3e0582 sha256=129a6979f930 (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T15:29:24Z AUTO_SEAL_LAUNCHED lane=MEDIA1 run=pft-5f7bfdbdfe12cefd2bff90eb receipt=receipt-380437496b0c5f57b1e87a1e sha256=a02dafa32770 (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T15:30:48Z SEALED_ORDERED lane=MEDIA1 run=pft-5f7bfdbdfe12cefd2bff90eb gen=d51b993a after=020e6c42 sha256=a02dafa32770 (auto seal; gpu-16 not woken)",
+  "2026-11-16T15:54:38Z AUTO_SEAL_LAUNCHED lane=POWER8 run=pft-9ff7268f2fc51a176506ad73 receipt=receipt-639227db2e933d2d4cd532ae sha256=0eae1b1df36b (dry run PASS; gpu-16 not woken)",
+  "2026-11-16T15:56:35Z SEALED_ORDERED lane=POWER8 run=pft-9ff7268f2fc51a176506ad73 gen=d575e1a1 after=d51b993a sha256=0eae1b1df36b log=/home/matt/recovery/gpu16/runs/auto-seal-logs/0eae1b1df36b-20261116T155635Z.log (auto seal; gpu-16 not woken)"
+ ],
+ "now": "2026-11-16T16:06:08Z",
+ "relay_log": [
+  "RELAYED from=BENCH to=IO8 file=/runs/IO8-U10-BENCH-RESULT.txt at=2026-11-15T04:17:41Z",
+  "RELAYED from=BENCH to=PLAY9 file=/runs/PLAY9-R7-BENCH-RESULT.txt at=2026-11-15T04:49:23Z",
+  "RELAYED from=PLAY9 to=BENCH file=/runs/DEVICE_REQUEST.md at=2026-11-15T04:55:46Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R14-BENCH-RESULT.txt at=2026-11-15T05:19:56Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R14-STEP-ADDENDUM.txt at=2026-11-15T05:19:58Z",
+  "RELAYED from=BENCH to=KIT6 file=/runs/KIT6-R4-BENCH-RESULT.txt at=2026-11-15T05:38:40Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R15-BENCH-RESULT.txt at=2026-11-15T06:21:42Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R15-ADDENDUM.txt at=2026-11-15T06:21:42Z",
+  "RELAYED from=BENCH to=PLAY9 file=/runs/PLAY9-R8-BENCH-RESULT.txt at=2026-11-15T06:46:53Z",
+  "RELAYED from=PLAY9 to=BENCH file=/runs/DEVICE_REQUEST.md at=2026-11-15T06:55:54Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R16-BENCH-RESULT.txt at=2026-11-15T07:20:56Z",
+  "RELAYED from=BENCH to=GFX7 file=/runs/GFX7-TQ-CAPTURE-BENCH-RESULT.txt at=2026-11-15T07:28:27Z",
+  "RELAYED from=BENCH to=GFX7 file=/runs/GFX7-R8-PBE-BENCH-RESULT.txt at=2026-11-15T08:00:41Z",
+  "RELAYED from=BENCH to=PLAY9 file=/runs/PLAY9-R9-BENCH-RESULT.txt at=2026-11-15T08:23:47Z",
+  "RELAYED from=PLAY9 to=BENCH file=/runs/DEVICE_REQUEST.md at=2026-11-15T08:29:04Z",
+  "RELAYED from=BENCH to=IO8 file=/runs/IO8-U11-BENCH-RESULT.txt at=2026-11-15T08:44:35Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R17-BENCH-RESULT.txt at=2026-11-15T09:16:26Z",
+  "RELAYED from=BENCH to=PLAY9 file=/runs/PLAY9-R10-BENCH-RESULT.txt at=2026-11-15T09:41:59Z",
+  "RELAYED from=PLAY9 to=BENCH file=/runs/DEVICE_REQUEST.md at=2026-11-15T10:09:44Z",
+  "RELAYED from=BENCH to=KIT6 file=/runs/KIT6-R5-BENCH-RESULT.txt at=2026-11-15T10:26:51Z",
+  "RELAYED from=BENCH to=KIT6 file=/runs/KIT6-R6-BENCH-RESULT.txt at=2026-11-15T11:02:26Z",
+  "RELAYED from=BENCH to=KIT6 file=/runs/KIT6-R5-ADDENDUM.txt at=2026-11-15T11:02:26Z",
+  "RELAYED from=GFX7 to=BENCH file=/runs/DEPLOY_REQUEST-GFX7-pf-node-01-9d7ce2cc-vendor-bootchain-r1.md at=2026-11-15T11:43:32Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R18-BENCH-RESULT.txt at=2026-11-15T11:48:27Z",
+  "RELAYED from=BENCH to=PLAY9 file=/runs/PLAY9-R11-BENCH-RESULT.txt at=2026-11-15T12:22:01Z",
+  "RELAYED from=BENCH to=IO8 file=/runs/IO8-U12-BENCH-RESULT.txt at=2026-11-15T12:45:17Z",
+  "RELAYED from=BENCH to=KIT6 file=/runs/KIT6-BUILD45-BENCH-RESULT.txt at=2026-11-15T13:00:55Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R19-BENCH-RESULT.txt at=2026-11-15T13:43:09Z",
+  "RELAYED from=PLAY9 to=BENCH file=/runs/DEVICE_REQUEST.md at=2026-11-15T14:01:55Z",
+  "RELAYED from=BENCH to=GFX7 file=/runs/GFX7-DDK-TQ-CAPTURE-BENCH-RESULT.txt at=2026-11-15T14:11:50Z",
+  "RELAYED from=PLAY9 to=BENCH file=/runs/DEVICE_REQUEST.md at=2026-11-15T14:50:51Z",
+  "RELAYED from=GFX7 to=BENCH file=/runs/DEPLOY_REQUEST-GFX7-pf-node-01-605cd63f-vendor-banner-fullimage-r1.md at=2026-11-15T16:18:36Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R21-BENCH-RESULT.txt at=2026-11-15T17:22:12Z",
+  "RELAYED from=PLAY9 to=BENCH file=/runs/DEVICE_REQUEST.md at=2026-11-15T17:54:00Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R22-BENCH-RESULT.txt at=2026-11-15T19:41:32Z",
+  "RELAYED from=BENCH to=GFX7 file=/runs/GFX7-DDK-TQ-CAPTURE-R3-BENCH-RESULT.txt at=2026-11-15T20:29:28Z",
+  "RELAYED from=BENCH to=KIT6 file=/runs/KIT6-R6C-BENCH-RESULT.txt at=2026-11-15T21:05:59Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R22B-BENCH-RESULT.txt at=2026-11-15T21:55:44Z",
+  "RELAYED from=BENCH to=IO8 file=/runs/IO8-U15-BENCH-RESULT.txt at=2026-11-15T22:51:49Z",
+  "RELAYED from=BENCH to=KIT6 file=/runs/KIT6-R5C-BENCH-RESULT.txt at=2026-11-15T23:25:59Z",
+  "RELAYED from=BENCH to=GFX7 file=/runs/GFX7-DDK-TQ-CAPTURE-R4-BENCH-RESULT.txt at=2026-11-15T23:27:18Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R22C-BENCH-RESULT.txt at=2026-11-16T00:17:58Z",
+  "RELAYED from=BENCH to=IO8 file=/runs/IO8-U16-BENCH-RESULT.txt at=2026-11-16T00:37:21Z",
+  "RELAYED from=BENCH to=KIT6 file=/runs/KIT6-R6D-BENCH-RESULT.txt at=2026-11-16T01:09:44Z",
+  "RELAYED from=BENCH to=GFX7 file=/runs/GFX7-DDK-TQ-CAPTURE-R5-BENCH-RESULT.txt at=2026-11-16T01:29:04Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R22D-BENCH-RESULT.txt at=2026-11-16T02:17:47Z",
+  "RELAYED from=BENCH to=KIT6 file=/runs/KIT6-R5D-BENCH-RESULT.txt at=2026-11-16T02:49:15Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R22E-BENCH-RESULT.txt at=2026-11-16T03:41:11Z",
+  "RELAYED from=BENCH to=PLAY9 file=/runs/PLAY9-R12C-BENCH-RESULT.txt at=2026-11-16T04:13:06Z",
+  "RELAYED from=BENCH to=GFX7 file=/runs/GFX7-DDK-TQ-CAPTURE-R6-BENCH-RESULT.txt at=2026-11-16T04:45:39Z",
+  "RELAYED from=GFX7 to=BENCH file=/runs/DIAGNOSTIC_REQUEST-GFX7-r6-boot0-medium.md at=2026-11-16T04:57:47Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R22F-BENCH-RESULT.txt at=2026-11-16T06:15:02Z",
+  "RELAYED from=GFX7 to=BENCH file=/runs/DEPLOY-REQUEST-runner-clone-35648edb.json at=2026-11-16T10:28:44Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R22F-BENCH-RESULT-3.txt at=2026-11-16T12:16:43Z",
+  "RELAYED from=BENCH to=MEDIA1 file=/runs/MEDIA1-G2D-BENCH-RESULT.txt at=2026-11-16T12:53:42Z",
+  "RELAYED from=BENCH to=MEDIA1 file=/runs/MEDIA1-ENC-BENCH-RESULT.txt at=2026-11-16T13:39:55Z",
+  "RELAYED from=GFX7 to=BENCH file=/runs/DEPLOY-REQUEST-runner-clone-1c4a89fa.json at=2026-11-16T14:04:26Z",
+  "RELAYED from=BENCH to=POWER8 file=/runs/POWER8-R22G-BENCH-RESULT.txt at=2026-11-16T14:25:17Z",
+  "RELAYED from=BENCH to=MEDIA1 file=/runs/MEDIA1-G2D-D2D5-BENCH-RESULT.txt at=2026-11-16T15:10:31Z",
+  "RELAYED from=BENCH to=DISP1 file=/runs/DISP1-PANEL-R1-BENCH-RESULT.txt at=2026-11-16T15:49:38Z",
+  "RELAYED from=GFX7 to=BENCH file=/runs/DEPLOY-REQUEST-runner-clone-8bd2fbba.json at=2026-11-16T15:54:47Z"
+ ],
+ "relay_sent": {
+  "delivery 0139871e181cdcdc5a6d3b989a4ad47fd0fe134d2099d96c3969d665ad9900d2": {
+   "at": "2026-11-15T22:30:05Z",
+   "generation": "4ad0fb71557edafa3170e7962830383f",
+   "kind": "window_request",
+   "requester": "KIT6"
+  },
+  "delivery 0dead47d54651d2a613528d4b4aa209bb4edccfd1b28a02a5e9af3c8b893c462": {
+   "at": "2026-11-15T06:40:45Z",
+   "generation": "e0b0412435b9d498844d4a1561bcef23",
+   "kind": "window_request",
+   "requester": "GFX7"
+  },
+  "delivery 1132820696696e44a8ab02a8f55c394e5da514b3c2a46eecf54947c86e0ec5cf": {
+   "at": "2026-11-15T05:49:14Z",
+   "generation": "c542c1205c5ea74c1c9f9f3fcf1a9c44",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery 13d9e5bf6dcd5fa7054b647dce869e4eb780a7494efdb9e56c05f2ef635ac52d": {
+   "at": "2026-11-16T13:31:43Z",
+   "generation": "692f0f276f9b8b44e4b69acc17da5d65",
+   "kind": "window_request",
+   "requester": "MEDIA1"
+  },
+  "delivery 160aa334e5290304764703d72146cd63e41070fad2b6991e4301e11d7b76d3fa": {
+   "at": "2026-11-15T08:29:13Z",
+   "generation": "2f26321378f7a336697dabfd0d51604a",
+   "kind": "window_request",
+   "requester": "PLAY9"
+  },
+  "delivery 185abd2a48dec9096070638c0877dca382d530b81615a2e1f9c65734202604ea": {
+   "at": "2026-11-15T14:01:17Z",
+   "generation": "4890060e48eedfd4d5adf83dfee48f24",
+   "kind": "window_request",
+   "requester": "GFX7"
+  },
+  "delivery 18a67d62152a10941835b6286d4c257cc5967609dcce08463e100d4613392c88": {
+   "at": "2026-11-16T09:08:56Z",
+   "generation": "35d562c47b19df87a14090231fea62ff",
+   "kind": "window_request",
+   "requester": "MEDIA1"
+  },
+  "delivery 1af699ec178b72eed2b00429c6a7948a18d0c90e3149a08f303926b64c910322": {
+   "at": "2026-11-16T14:26:41Z",
+   "generation": "feed84b9728edf1d87e3887da31ea110",
+   "kind": "window_request",
+   "requester": "PM1"
+  },
+  "delivery 1fb788b3b8d920a5b34a573329466dc56eeadfb62009134d9d0041fe1185bbff": {
+   "at": "2026-11-15T22:30:27Z",
+   "generation": "1eef0e618d0df2f800ed284b277cbd13",
+   "kind": "window_request",
+   "requester": "GFX7"
+  },
+  "delivery 20595ff3ce0ba1929e3d9f4ce45f638e1de44f0f144f742b4a9bcf8619dd2ddf": {
+   "at": "2026-11-15T06:56:08Z",
+   "generation": "bf42fa9717c2842176a7c14e12afd8b3",
+   "kind": "window_request",
+   "requester": "PLAY9"
+  },
+  "delivery 26be94ca2968e89d8bf6b59d4e3da1f900881d93c712a62fd885c03328a59f60": {
+   "at": "2026-11-15T09:43:23Z",
+   "generation": "328c5bdd3c18b35f9993aada3baa9f1d",
+   "kind": "window_request",
+   "requester": "KIT6"
+  },
+  "delivery 29c53f56ed21ab808e459cd0f96e33143494c89c2bdbb53add42c9756c6b7b6a": {
+   "at": "2026-11-16T14:22:50Z",
+   "generation": "cfa7ba0c7d47c326dd7fd80bbc09aa4a",
+   "kind": "window_request",
+   "requester": "PM1"
+  },
+  "delivery 2b9266613e001aa963c7749b612bf1e5f9eff31e6c735f4203148c6b6cabd190": {
+   "at": "2026-11-15T17:45:39Z",
+   "generation": "78d40f801570992c0cc257031cee23de",
+   "kind": "window_request",
+   "requester": "GFX7"
+  },
+  "delivery 3425eac5fc8fff7cbbe2f319d5dbfbb0ebf9a6afbce8dfacd9017098ec6b6bbc": {
+   "at": "2026-11-16T15:07:51Z",
+   "generation": "020e6c42317baaa77fad191328090501",
+   "kind": "window_request",
+   "requester": "PLAY9"
+  },
+  "delivery 34bf6bb950e67200fa0b0d30f599ef0014bb8403bd6b225dba343c3d7b00e465": {
+   "at": "2026-11-15T17:38:04Z",
+   "generation": "4f515516a66cbbce05c557fefde20be3",
+   "kind": "window_request",
+   "requester": "KIT6"
+  },
+  "delivery 3671a6d33aea7b0956bec1fc1b0273859ee04d50e64652b591227cbdb625a2af": {
+   "at": "2026-11-16T00:34:26Z",
+   "generation": "a00054e5f7e90786088115974efcd4f2",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery 3cf457f126c344f3cb38e2d945691b7ad9681e49d7d12c466166c2a321efd40d": {
+   "at": "2026-11-16T05:38:51Z",
+   "generation": "a49612537aae9d6c22ac9b0d763de5cd",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery 422ae14dc4556e9b30764fb3bbc4c060c791ebf6189b69731120b16ab4d41de1": {
+   "at": "2026-11-16T02:24:32Z",
+   "generation": "977a8ccc3d527da7ddb404bae3158e9b",
+   "kind": "window_request",
+   "requester": "KIT6"
+  },
+  "delivery 4367998ca558c86ea8bd6267e94eb2f2ec0c8fe193879bedb4fe39bebf56309c": {
+   "at": "2026-11-15T17:37:17Z",
+   "generation": "745f17e36c84f38c9d4c1a2db45544ad",
+   "kind": "window_request",
+   "requester": "KIT6"
+  },
+  "delivery 46fd43d7294af18e54e987efaae6e1b3d92a37fc6879f82c777808e952ebd29c": {
+   "at": "2026-11-16T14:14:40Z",
+   "generation": "24e20600965e9a7d6c84716af699b60a",
+   "kind": "window_request",
+   "requester": "DISP1"
+  },
+  "delivery 55aeab8a466b2499d444b81c9ee2dab3f4e76d95f49ed2d056ca2ed27b966c1e": {
+   "at": "2026-11-15T04:22:29Z",
+   "generation": "98661f380b576de02b817c737c830788",
+   "kind": "window_request",
+   "requester": "PLAY9"
+  },
+  "delivery 57ce82ffdd7c92c5aa5b0b1f3c7cc4ece5a5f5ca990abd79c7d8d5d51b56ee87": {
+   "at": "2026-11-15T14:02:02Z",
+   "generation": "f34105336ad695f3d51cfd8959ae55d8",
+   "kind": "window_request",
+   "requester": "PLAY9"
+  },
+  "delivery 5b860be68098531de85f5852f9a0a7c04b96848a4155b2f28dfa97127f17be47": {
+   "at": "2026-11-15T09:44:24Z",
+   "generation": "dad1477b4c6217831998b90912b7861d",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery 5c321a08e5269cb4593a8c26438318fac150225784dfa57a4f4d17123d2ebd9a": {
+   "at": "2026-11-15T04:33:23Z",
+   "generation": "645c45f0fd4c93a67696db350e36a4f8",
+   "kind": "window_request",
+   "requester": "KIT6"
+  },
+  "delivery 676a085818f8a17bfb8db2604fa1576088d00c6829229df4dd7f9764a3f3b89a": {
+   "at": "2026-11-16T15:30:48Z",
+   "generation": "d51b993af6981d53956ecdc7634e964a",
+   "kind": "window_request",
+   "requester": "MEDIA1"
+  },
+  "delivery 688c0d25599036d3bff394a752b9923eacde2bd395edbec2e918bc5a13d720ef": {
+   "at": "2026-11-15T14:02:17Z",
+   "generation": "3c83c825ddfa1e281bf502bae98f03cb",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery 6d672f8c4632e39450ae1f7c73aeb4de7a4c1592d6c5f097668333f5f1521ef1": {
+   "at": "2026-11-15T22:29:39Z",
+   "generation": "8403354ced7fe7fdf6c3bbcb4b923d7a",
+   "kind": "window_request",
+   "requester": "IO8"
+  },
+  "delivery 6e83ed7d1888f0e6fc37073ed284e15133bfaa9a21e30b9861684a289c0ad854": {
+   "at": "2026-11-15T17:41:51Z",
+   "generation": "84399baa81cb03e8849d6042737774b4",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery 6e8d487a7016cfc7709013145fe9a30ebcd0bb555a7ca215cad2065a84a00b7d": {
+   "at": "2026-11-16T13:17:22Z",
+   "generation": "a6a97e23d087e192614c1b24d5f3e1be",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery 706a4279de919fdac399b2309699894cabff1a9d40a8dfbaeb184fcbd7a747a5": {
+   "at": "2026-11-15T22:30:47Z",
+   "generation": "29a20b38be22090ce37808da3eba20af",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery 7653341769c39232daa78ed6b783cb257bd063204c2486d848938ed4a1499e1b": {
+   "at": "2026-11-15T15:49:53Z",
+   "generation": "c77f5d43c816c29ef39e6a590766580f",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery 7f4f99a9fec23c290c26f70460a44e051369202cfb87466efbc8a1c1fa1b43e7": {
+   "at": "2026-11-15T18:53:02Z",
+   "generation": "d39e0992ccf3a27e8c2840d4bb76571e",
+   "kind": "window_request",
+   "requester": "KIT6"
+  },
+  "delivery 8463cb2f64efcc431ac9d0d34de60a5d6abf5423ad86f30c7a92e10827b65110": {
+   "at": "2026-11-15T07:25:56Z",
+   "generation": "5ccba858bcd8a65cf5239c61390711c7",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery 899d8e3696c852f517a71e07b75a4f1c84c55b95dc0b01933e0f2afe90bdf899": {
+   "at": "2026-11-15T05:54:46Z",
+   "generation": "c1d0b8f9cd0de12e6fab3a3efcf87f15",
+   "kind": "window_request",
+   "requester": "PLAY9"
+  },
+  "delivery 8ac5c49f6de3db945ac7b1a53496641fb6287dc6723157782667bdc99060cf7f": {
+   "at": "2026-11-15T06:27:03Z",
+   "generation": "93784300198d7d0517c071d02bb18380",
+   "kind": "window_request",
+   "requester": "GFX7"
+  },
+  "delivery 8e1c85f6d9946222b0125716354d829b1d3043c12a8eab6d0e67e8e34e623090": {
+   "at": "2026-11-15T10:09:48Z",
+   "generation": "85c6edeadf68d44a86c872d999e8bc11",
+   "kind": "window_request",
+   "requester": "PLAY9"
+  },
+  "delivery 998e1d913ec7a9c3fd2939eff76bf1c707a9eb7f44e3f9c28eebffa45c6f3a57": {
+   "at": "2026-11-15T07:00:07Z",
+   "generation": "c6fa3db969d6bcfbc0632f6f17b065ca",
+   "kind": "window_request",
+   "requester": "IO8"
+  },
+  "delivery 9c32ff7287afa5332756f2c2c6ffc61612c9ace7dd6457b5d787a6baa138a047": {
+   "at": "2026-11-15T19:54:27Z",
+   "generation": "71a5faa45f3306a17e4c302443907f41",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery 9f1129e84ea515f6c061b24b298f4069b096e362fafee94ebaf5f9de2f857cf3": {
+   "at": "2026-11-15T23:31:04Z",
+   "generation": "30f94257d51cb1b0964f356885f73e7d",
+   "kind": "window_request",
+   "requester": "GFX7"
+  },
+  "delivery a3d6c50f901b3d7098709d9519670d49819e7fe65bdce528a0ab475ccc7cb40f": {
+   "at": "2026-11-15T23:08:30Z",
+   "generation": "2a0a583f17229a4e3cb20c8c59b85a3f",
+   "kind": "window_request",
+   "requester": "IO8"
+  },
+  "delivery aca7518add62574da80c1408543b2d400f5f79deefcc3bf6324445d27bc4e069": {
+   "at": "2026-11-16T02:25:19Z",
+   "generation": "c10863eb37d4681c178af04dcc842bc8",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery b16302a7bece3b50e170faca04538040afbd7a552738ede4953264c88f7ae142": {
+   "at": "2026-11-16T03:28:57Z",
+   "generation": "cca4af044c9a387674c94f66db81ae11",
+   "kind": "window_request",
+   "requester": "PLAY9"
+  },
+  "delivery b3c28be76bbdb104b80ba1a848188741b446571cd75cf864a545ef6148820242": {
+   "at": "2026-11-15T14:14:54Z",
+   "generation": "1a4b69dcf30dfc4a5a03d7a0c1df25be",
+   "kind": "window_request",
+   "requester": "IO8"
+  },
+  "delivery c04def93d3488a4da8af1755df7f547477092dbc8b5802d0ef86a77575e65f6a": {
+   "at": "2026-11-16T14:16:38Z",
+   "generation": "bdd7c3c0bec04357c2c2cec3e5c022ce",
+   "kind": "window_request",
+   "requester": "PM1"
+  },
+  "delivery c2e3f778b8fa7ecd36fa7d16ec321649e62d8c437be52c215de3e491740ee0c7": {
+   "at": "2026-11-15T11:42:30Z",
+   "generation": "643bf462e7dc9fb4ca096f7cbd985f7e",
+   "kind": "window_request",
+   "requester": "KIT6"
+  },
+  "delivery c40370893568d140b8bf2be73f349c664518716b904ac2eda6ca35bcc1d28840": {
+   "at": "2026-11-15T12:37:59Z",
+   "generation": "decfdbbb69f13c45d12b4be449638a3e",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery c7c3be79e8aca7e7ce3aaef44d082657ce72fa6c763f36b4566d8af4eb1a4b29": {
+   "at": "2026-11-15T11:38:28Z",
+   "generation": "953e09ef3a4aa6c9661f8199fb52d281",
+   "kind": "window_request",
+   "requester": "IO8"
+  },
+  "delivery c98b2246f9c105984ad9a088b6a7494ab7fa3f4f9f7219aa85af53090b6fd3e4": {
+   "at": "2026-11-15T06:26:35Z",
+   "generation": "1569a27c70e7bcf9a5a1591053ff4b29",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery caa0abcefbecbf1e0387c8d8d501ce264bd8ec8d136b947da6c939a6492628e9": {
+   "at": "2026-11-16T11:15:54Z",
+   "generation": "dd8673961b72fc7921e3eadc2998e52b",
+   "kind": "window_request",
+   "requester": "MEDIA1"
+  },
+  "delivery d023f4a348e0f1a501b5b7b466e1ad64423d8b087ee3cc81374d968dd3c26480": {
+   "at": "2026-11-15T04:25:18Z",
+   "generation": "1ad04a87bce0d5d14d456d9d45fc6c86",
+   "kind": "window_request",
+   "requester": "POWER8"
+  },
+  "delivery d3422068fb9a178a0434ecfb8a8439468f4c8f3c14b53b449fe7dde17e82d983": {
+   "at": "2026-11-15T23:26:39Z",
+   "generation": "bcc65ed75ededc9291e2b8c1e8ab8b6b",
+   "kind": "window_request",
+   "requester": "KIT6"
+  },
+  "delivery d53288b85eb05e8bf0debb7aa35546591c78d0442bf1d41cc7111ec109858e7b": {
+   "at": "2026-11-16T14:28:16Z",
+   "generation": "a664f8f86eb994d20003c2423c1b34c7",
+   "kind": "window_request",
+   "requester": "PM1"
+  },
+  "delivery dcb4b341717e6ba5654b41ec7d05a9ce79cc88b7395a339f03a1da79ce80e85e": {
+   "at": "2026-11-15T14:51:03Z",
+   "generation": "6ef6255e1bc900e521d46b7ac2694922",
+   "kind": "window_request",
+   "requester": "PLAY9"
+  },
+  "delivery e2a8a1c6b0ded07b7543ef0c7ffc88a4b5eff7db38dde0125547b12ba550d4bc": {
+   "at": "2026-11-15T17:54:07Z",
+   "generation": "a36844fcd276e18291dce4c4058fdc94",
+   "kind": "window_request",
+   "requester": "PLAY9"
+  },
+  "delivery e98f148a43087514029b805c3ef01fbe32781b5afc7cc948f2a6e2fc53810009": {
+   "at": "2026-11-16T04:19:13Z",
+   "generation": "1d1259465f55dd72865715c0bcce1f84",
+   "kind": "window_request",
+   "requester": "GFX7"
+  },
+  "delivery edfa68d0efcf615234544e25ef84ac1b105ef17b3b76209a6443329bfe9c431d": {
+   "at": "2026-11-15T09:43:56Z",
+   "generation": "651e3c8228d3d1663e79a5c7ec7ad2c3",
+   "kind": "window_request",
+   "requester": "KIT6"
+  },
+  "delivery f536d4d006044a0bd9e910e9a5c0cb1ad60ae60146cc0dbc0a7ddd6c2ec51e0b": {
+   "at": "2026-11-15T17:45:04Z",
+   "generation": "dfb626fda7feb73e31905fcd46e058c5",
+   "kind": "window_request",
+   "requester": "IO8"
+  },
+  "delivery f5429bc935553642a7df7cd2cec52953f00c20eb2a216184d2999a5edcc8ab0a": {
+   "at": "2026-11-16T15:56:35Z",
+   "generation": "d575e1a1030b92096ea972c880d1d722",
+   "kind": "window_request",
+   "requester": "POWER8"
+  }
+ }
+}
