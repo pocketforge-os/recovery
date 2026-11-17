@@ -298,6 +298,30 @@ class Defects(unittest.TestCase):
         self.assertAlmostEqual(t["deploy"] * 3600, 60, places=3)
         self.assertAlmostEqual(t["empty"], self.pre + self.mid + self.post - 60 / 3600, places=3)
 
+    def live_deploys(self, rows):
+        """rows: (ready time, request file name, result file name, AppliedBy line): shapes copied from runs/events.log and gpu16/deploys."""
+        for ready, req, res, applied in rows:
+            self.b.events.append(f"{Z(ready)} EVENT run=G16FIX - DEPLOY_READY request=05e3c648 target=runner-clone sha={'c' * 40} lane=INFRA1 "
+                                 f"which=gen=002e7d40 file=/home/matt/recovery/gpu16/deploys/{req} (preconditions met, no bench window open)")
+            put(f"{self.tmp.name}/gpu16/deploys/{res}",
+                f"Outcome=PASS\nTarget=runner-clone\n{applied}\nWithdrawn=none\n")
+
+    def test_live_applied_by_shapes_and_suffixed_request_names_pair_by_sha8(self):
+        self.two_windows()
+        self.live_deploys([
+            (self.at("08:00"), "DEPLOY-REQUEST-runner-clone-c40bf66d-r8.json", "DEPLOY-RESULT-runner-clone-c40bf66d.txt",
+             "AppliedBy=gpu-16 2026-11-16T08:01:30Z: preflight PASS, apply PASS (installer APPLIED, unit 4a6d32)"),      # ": gpu-16 <ISO>Z" form, -r8 suffix
+            (self.at("08:30"), "DEPLOY-REQUEST-runner-clone-4b08a895-f8k2.json", "DEPLOY-RESULT-runner-clone-4b08a895.txt",
+             "AppliedBy=deploy-runner-clone.sh apply 2026-11-16T08:32:00Z matt"),                                         # current form, -f8k2 suffix
+            (self.at("09:00"), "DEPLOY-REQUEST-runner-clone-1646d04b.json", "DEPLOY-RESULT-runner-clone-1646d04b.txt",
+             "AppliedBy=gpu-16 2026-11-16T09:03Z: deploy-runner-clone.sh preflight PASS, apply PASS (clone pa-1646d04b)"),  # no seconds
+            (self.at("09:30"), "DEPLOY-REQUEST-runner-clone-707a1785.json", "DEPLOY-RESULT-runner-clone-707a1785.txt",
+             "AppliedBy=gpu-16 2026-11-16 via tooling-health/deploy-runner-clone.sh preflight/apply/verify PASS; unit dc5623"),  # a date, no time
+        ])
+        t = self.b.table()
+        self.assertAlmostEqual(t["deploy"] * 3600, 90 + 120 + 180, places=3)
+        self.assertIn("runner deploys skipped (AppliedBy has no time): 1", "\n".join(self.b.run()))
+
     def test_deploy_outside_the_window_or_unapplied_counts_nothing(self):
         self.two_windows()
         self.b.info.append(f"{Z(self.at('08:30'))} EVENT run=G16FIX - DEPLOY_READY request=1 target=runner-clone sha={'d' * 40} lane=X "

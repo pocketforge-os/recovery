@@ -330,7 +330,10 @@ def halt_episodes():
 
 
 DEPLOY_READY_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (?:EVENT run=\S+ \S+ )?DEPLOY_READY\b.*?\bfile=(\S+DEPLOY-REQUEST-([^/\s]+?)\.(?:json|md))")
-APPLIED_BY_RE = re.compile(r"^AppliedBy=\S+ (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\b", re.M)
+APPLIED_BY_RE = re.compile(r"^AppliedBy[=:].*$", re.M)
+APPLIED_TS_RE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?Z")
+REQ_NAME_RE = re.compile(r"^(.*?)-([0-9a-f]{8})(?:-[0-9A-Za-z]+)*$")  # <target>-<sha8>[-r2|-f8k2 ...]
+deploy_skipped = 0
 ISO_Z = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
 BUILD_DISPATCH_RE = re.compile(rf"^({ISO_Z}) EVENT run=(\S+) \S+ BUILD_DISPATCH_RESULT\b")
 IMAGE_PUBLISHED_RE = re.compile(rf"^(?:({ISO_Z}) )?(?:EVENT run=\S+ \S+ )?IMAGE_PUBLISHED\b(.*)$")
@@ -342,24 +345,44 @@ def log_lines():
         yield from read_lines(f"{RUNS}/{name}") or ()
 
 
+def applied_at(path):
+    """The first ISO timestamp (seconds optional) on a DEPLOY-RESULT's AppliedBy line; None if there is none (a bare date)."""
+    try:
+        with open(path) as f:
+            line = APPLIED_BY_RE.search(f.read())
+    except OSError:
+        return None
+    m = APPLIED_TS_RE.search(line.group(0)) if line else None
+    return tparse(m.group(0) if m.group(0).count(":") == 2 else m.group(0)[:-1] + ":00Z", None) if m else None
+
+
 def deploy_gaps():
     """Runner deploys [(request filed, applied)]: from a DEPLOY_READY line (the deploy request filed, info.log/events.log) to the
-    AppliedBy time of its DEPLOY-RESULT file (gpu16/deploys/DEPLOY-RESULT-<same name as the request>.txt). A pin change between
-    two boot-opens is NOT a deploy (AutomationSHA is the clone each sealed request was pinned to); a request with no applied
-    result yet books nothing."""
-    out = []
+    AppliedBy time of the DEPLOY-RESULT of the same target and sha8 (gpu16/deploys/DEPLOY-RESULT-<target>-<sha8>*.txt; a -rN or
+    -f8k2 suffix on the request name is ignored). A pin change between boot-opens is NOT a deploy (AutomationSHA is the clone
+    each sealed request was pinned to). A request with no result, or whose AppliedBy has no time (a bare date), books nothing;
+    the latter are counted in deploy_skipped."""
+    global deploy_skipped
+    deploy_skipped = 0
+    out, d = [], os.path.dirname(RUNS) + "/deploys"
+    try:
+        results = sorted(os.listdir(d))
+    except OSError:
+        results = []
     for line in log_lines():
         m = DEPLOY_READY_RE.match(line)
-        if not m:
+        n = REQ_NAME_RE.match(m.group(3)) if m else None
+        if not n:
             continue
-        try:
-            with open(os.path.dirname(RUNS) + f"/deploys/DEPLOY-RESULT-{m.group(3)}.txt") as f:
-                am = APPLIED_BY_RE.search(f.read())
-        except OSError:
-            continue
-        a, b = tparse(m.group(1), None), tparse(am.group(1), None) if am else None
-        if a and b and b > a:
-            out.append((a, b))
+        a = tparse(m.group(1), None)
+        prefix = f"DEPLOY-RESULT-{n.group(1)}-{n.group(2)}"
+        files = [f for f in results if f.endswith(".txt") and (f[:-4] == prefix or f.startswith(prefix + "-"))]
+        times = [applied_at(f"{d}/{f}") for f in files]
+        ends = [t for t in times if t and t >= a]
+        if ends:
+            out.append((a, min(ends)))
+        elif files and not any(times):
+            deploy_skipped += 1
     return out
 
 
@@ -494,6 +517,8 @@ if split:
           f" | observer dry-run (device off)={split['observer']/3600:.1f}h | nothing sealed={split['empty']/3600:.1f}h"
           f" | runner queue HALT={split['halt']/3600:.1f}h | runner deploy={split['deploy']/3600:.1f}h"
           f" | awaiting image={split['awaiting_image']/3600:.1f}h | seal-ready unsealed={split['seal_ready']/3600:.1f}h")
+if deploy_skipped:
+    print(f"  runner deploys skipped (AppliedBy has no time): {deploy_skipped}")
 print(f"  not idle (not in stopped): runner teardown={cls['teardown']/3600:.1f}h ({n_teardown})"
       f" | failed boot loads={failed_s/3600:.1f}h ({n_failed})")
 if have_seal_records:
