@@ -52,7 +52,7 @@ or a boot-open is split by what the bench was doing, one cause per instant, firs
                     line, or a relay.log RELAYED lane->BENCH DEVICE_REQUEST file. A relay of anything else (a
                     DIAGNOSTIC_REQUEST, a DEPLOY_REQUEST, a note) is NOT a sealed request.
   observer dry-run  an OBSERVER-DRY-RUN request was out (BENCH busy, device off), as before.
-  awaiting image    BUILD_DISPATCH_RESULT .. IMAGE_PUBLISHED of the same platform sha, with nothing sealed.
+  awaiting image    BUILD_DISPATCH_RESULT .. the next IMAGE_PUBLISHED for the same requester lane, with nothing sealed.
   seal-ready unsealed  a SEAL_READY wait result .. the SEALED_ORDERED that follows it (gen= or after= matches), nothing sealed.
   nothing sealed    none of the above: no runnable request was queued.
 Not separable from these records, so inside "sealed ... BENCH": a terminal that never woke BENCH, and BENCH
@@ -331,8 +331,9 @@ def halt_episodes():
 
 DEPLOY_READY_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (?:EVENT run=\S+ \S+ )?DEPLOY_READY\b.*?\bfile=(\S+DEPLOY-REQUEST-([^/\s]+?)\.(?:json|md))")
 APPLIED_BY_RE = re.compile(r"^AppliedBy=\S+ (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\b", re.M)
-BUILD_DISPATCH_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (?:EVENT run=\S+ \S+ )?BUILD_DISPATCH_RESULT\b.*?\bplatform_sha=([0-9a-f]{8,40})")
-IMAGE_PUBLISHED_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (?:EVENT run=\S+ \S+ )?IMAGE_PUBLISHED\b.*?\b(?:platform_sha|sha)=([0-9a-f]{8,40})")
+ISO_Z = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
+BUILD_DISPATCH_RE = re.compile(rf"^({ISO_Z}) EVENT run=(\S+) \S+ BUILD_DISPATCH_RESULT\b")
+IMAGE_PUBLISHED_RE = re.compile(rf"^(?:({ISO_Z}) )?(?:EVENT run=\S+ \S+ )?IMAGE_PUBLISHED\b(.*)$")
 SEAL_READY_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) WAIT_RESULT\b.*?\btoken=SEAL_READY\b.*?\bresult=gen=([0-9a-f]{8,32})")
 
 
@@ -363,28 +364,35 @@ def deploy_gaps():
 
 
 def await_intervals():
-    """([awaiting image], [seal-ready unsealed]). Awaiting image: BUILD_DISPATCH_RESULT .. the first IMAGE_PUBLISHED of the same
-    platform sha (8-hex prefix). Seal-ready unsealed: a SEAL_READY wait result (result=gen=<id>) .. the first later SEALED_ORDERED
+    """([awaiting image], [seal-ready unsealed]). Awaiting image: BUILD_DISPATCH_RESULT .. the next IMAGE_PUBLISHED whose requester= is the
+    dispatching lane (run=<LANE>), at its at= time when it has one. Seal-ready unsealed: a SEAL_READY wait result (result=gen=<id>) .. the first later SEALED_ORDERED
     whose gen= or after= starts with that id. Unmatched starts book nothing (a dispatch that never published is not a wait)."""
-    lines = sorted(log_lines())
     dispatched, ready, images, seals = [], [], [], []
-    for line in lines:
-        for rx, acc in ((BUILD_DISPATCH_RE, dispatched), (IMAGE_PUBLISHED_RE, images), (SEAL_READY_RE, ready)):
-            m = rx.match(line)
-            if m and tparse(m.group(1), None):
-                acc.append((tparse(m.group(1), None), m.group(2)[:8]))
+    for line in log_lines():
+        m = BUILD_DISPATCH_RE.match(line)
+        if m and tparse(m.group(1), None):
+            dispatched.append((tparse(m.group(1), None), m.group(2)))
+        m = IMAGE_PUBLISHED_RE.match(line)
+        if m:
+            rest = m.group(2)
+            at = re.search(r"\bat=(" + ISO_Z + r")", rest)
+            who = re.search(r"\brequester=(\S+)", rest)
+            t = tparse(at.group(1), None) if at else tparse(m.group(1), None)
+            if t and who:
+                images.append((t, who.group(1)))
+        m = SEAL_READY_RE.match(line)
+        if m and tparse(m.group(1), None):
+            ready.append((tparse(m.group(1), None), m.group(2)[:8]))
         m = SEALED_ORDERED_RE.match(line)
         if m:
             ids = [x[:8] for x in re.findall(r"\b(?:gen|after)=([0-9a-f]{8,32})\b", m.group(2))]
             seals.append((when(m.group(1)), ids))
-    out_img, out_seal, used = [], [], set()
-    for t, sha in dispatched:
-        if sha in used:
-            continue
-        end = next((u for u, s in images if s == sha and u > t), None)
-        if end:
-            used.add(sha)
-            out_img.append((t, end))
+    out_img, out_seal, taken = [], [], set()
+    for t, lane in sorted(dispatched):
+        cands = [u for u, who in images if who == lane and u > t and u not in taken]
+        if cands:
+            taken.add(min(cands))
+            out_img.append((t, min(cands)))
     for t, gid in ready:
         end = next((u for u, ids in seals if u > t and gid in ids), None)
         if end:

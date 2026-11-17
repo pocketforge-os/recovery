@@ -304,22 +304,24 @@ class Defects(unittest.TestCase):
                            f"which=g file=/x/DEPLOY-REQUEST-runner-clone-dddddddd.json (preconditions met)")   # no DEPLOY-RESULT yet
         self.assertAlmostEqual(self.b.table()["deploy"], 0.0, places=3)
 
-    def test_awaiting_image_is_build_dispatch_to_image_published(self):
+    def test_awaiting_image_is_build_dispatch_to_the_same_lanes_image_published(self):
         self.two_windows()
-        sha = "f" * 40
-        self.b.events.append(f"{Z(self.at('08:00'))} EVENT run=GFX5 pft-x BUILD_DISPATCH_RESULT run=1 url=u profile=p variant=dev platform_sha={sha} cache=-")
-        self.b.info.append(f"{Z(self.at('09:00'))} EVENT run=GFX5 pft-x IMAGE_PUBLISHED platform_sha={sha} image=img")
+        self.b.events.append(f"{Z(self.at('08:00'))} EVENT run=POWER8 pft-x BUILD_DISPATCH_RESULT run=42309499056 url=https://github.com/o/r/actions/runs/1"
+                             f" profile=a133-open-7x-gpu variant=dev platform_sha={'f' * 40} cache=-")
+        self.b.events.append(f"{Z(self.at('08:10'))} EVENT run=GFX5 pft-z BUILD_DISPATCH_RESULT run=2 url=u profile=p variant=dev platform_sha={'e' * 40} cache=-")
+        # another lane's publish at 08:30 does not end POWER8's wait; POWER8's own publish does, at its at= time (09:00), not the log time (09:05)
+        self.b.info.append(f"{Z(self.at('08:30'))} IMAGE_PUBLISHED raw={'a' * 64} receipt=/r/1 requester=GFX5 lane_told=GFX5 match=declared at={Z(self.at('08:30'))}")
+        self.b.info.append(f"{Z(self.at('09:05'))} IMAGE_PUBLISHED raw={'b' * 64} receipt=/r/2 requester=POWER8 lane_told=POWER8 match=declared at={Z(self.at('09:00'))}")
         t = self.b.table()
-        self.assertAlmostEqual(t["awaiting_image"], 1.0, places=3)
-        self.assertAlmostEqual(t["empty"], self.pre + self.mid + self.post - 1.0, places=3)
-        out = "\n".join(self.b.run())
-        self.assertIn("awaiting image=1.0h", out)
+        self.assertAlmostEqual(t["awaiting_image"], 1.0, places=3)                                          # POWER8 08:00-09:00 (at=); GFX5 08:10-08:30 is inside it
+        self.assertAlmostEqual(t["empty"], self.pre + self.mid + self.post - t["awaiting_image"], places=3)
+        self.assertIn("awaiting image=1.0h", "\n".join(self.b.run()))
 
     def test_seal_ready_unsealed_is_the_receipt_to_sealed_ordered(self):
         self.two_windows()
         self.b.info.append(f"{Z(self.at('08:00'))} WAIT_RESULT run=POWER8 pft-y receipt=receipt-e1 status=WAITING token=SEAL_READY result=gen={self.A}"
                            " detail='reason=SEAL_READY R22d'")
-        self.b.info.append(f"{Z(self.at('09:00'))} EVENT run=POWER8 pft-y SEALED_ORDERED result=PASS reason=ordered gen={self.B} after={self.A[:8]} lane=R22F")
+        self.b.info.append(f"{Z(self.at('09:00'))} EVENT run=POWER8 pft-y SEALED_ORDERED lane=POWER8 run=pft-y gen={self.B[:8]} after={self.A[:8]} sha256=0123456789ab")
         t = self.b.table()
         self.assertAlmostEqual(t["seal_ready"], 1.0, places=3)                                  # 08:00 -> 09:00
         self.assertAlmostEqual(t["bench"], 1.0, places=3)                                       # sealed 09:00, launched 10:00
