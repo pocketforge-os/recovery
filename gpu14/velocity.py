@@ -44,14 +44,16 @@ or a boot-open is split by what the bench was doing, one cause per instant, firs
                     events.log RUNNER_QUEUE_HALT events (watch-runs.py runner_halt_check; since= is the onset),
                     and from kit-windows/forceoff-cap-clearance-*.json (onset = the newest failed.json of its
                     Generations, end = ClearedAt) for HALTs that predate the watcher.
-  runner deploy     the gap before a boot-open whose AutomationSHA differs from the previous boot-open's: a
-                    runner-clone deploy and the reseals after it, from the end of the previous window.
+  runner deploy     a runner deploy in progress: from its DEPLOY_READY line (request filed) to the AppliedBy time of its
+                    DEPLOY-RESULT file. A changed AutomationSHA between boot-opens is only a pin change, not a deploy.
   sealed ... BENCH  a sealed request was waiting to launch (the original "device" bucket: BENCH latency or a
                     BENCH-side refusal). Sealed = a runs/relay-sent.json window_request row (hand AND auto
                     seals; its generation names the boot-open that ends the wait), an info.log SEALED_ORDERED
                     line, or a relay.log RELAYED lane->BENCH DEVICE_REQUEST file. A relay of anything else (a
                     DIAGNOSTIC_REQUEST, a DEPLOY_REQUEST, a note) is NOT a sealed request.
   observer dry-run  an OBSERVER-DRY-RUN request was out (BENCH busy, device off), as before.
+  awaiting image    BUILD_DISPATCH_RESULT .. IMAGE_PUBLISHED of the same platform sha, with nothing sealed.
+  seal-ready unsealed  a SEAL_READY wait result .. the SEALED_ORDERED that follows it (gen= or after= matches), nothing sealed.
   nothing sealed    none of the above: no runnable request was queued.
 Not separable from these records, so inside "sealed ... BENCH": a terminal that never woke BENCH, and BENCH
 waiting on a gpu-16 ruling (the analysis found both only in g16-intent.log). stopped_h in velocity.tsv is now
@@ -327,30 +329,82 @@ def halt_episodes():
     return [(a, b) for a, b in eps if a and b and b > a]
 
 
+DEPLOY_READY_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (?:EVENT run=\S+ \S+ )?DEPLOY_READY\b.*?\bfile=(\S+DEPLOY-REQUEST-([^/\s]+?)\.(?:json|md))")
+APPLIED_BY_RE = re.compile(r"^AppliedBy=\S+ (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\b", re.M)
+BUILD_DISPATCH_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (?:EVENT run=\S+ \S+ )?BUILD_DISPATCH_RESULT\b.*?\bplatform_sha=([0-9a-f]{8,40})")
+IMAGE_PUBLISHED_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) (?:EVENT run=\S+ \S+ )?IMAGE_PUBLISHED\b.*?\b(?:platform_sha|sha)=([0-9a-f]{8,40})")
+SEAL_READY_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ) WAIT_RESULT\b.*?\btoken=SEAL_READY\b.*?\bresult=gen=([0-9a-f]{8,32})")
+
+
+def log_lines():
+    for name in ("info.log", "events.log"):
+        yield from read_lines(f"{RUNS}/{name}") or ()
+
+
 def deploy_gaps():
-    """Runner deploys between requests: a boot-open whose AutomationSHA (the runner clone its request is pinned to) differs from the
-    previous boot-open's. The deploy, a refusal if any, and the reseals after it fall between the end of the earlier work (the
-    latest failure or terminal.json written before it) and this request."""
-    out, prev_sha, ended = [], "", None
-    for t0, g, sha in sorted(pins):
-        if prev_sha and sha and sha != prev_sha and ended and ended < t0:
-            out.append((ended, t0))
-        prev_sha = sha or prev_sha
-        ended = max(x for x in (ended, occ_end.get(g)) if x) if (ended or occ_end.get(g)) else None
+    """Runner deploys [(request filed, applied)]: from a DEPLOY_READY line (the deploy request filed, info.log/events.log) to the
+    AppliedBy time of its DEPLOY-RESULT file (gpu16/deploys/DEPLOY-RESULT-<same name as the request>.txt). A pin change between
+    two boot-opens is NOT a deploy (AutomationSHA is the clone each sealed request was pinned to); a request with no applied
+    result yet books nothing."""
+    out = []
+    for line in log_lines():
+        m = DEPLOY_READY_RE.match(line)
+        if not m:
+            continue
+        try:
+            with open(os.path.dirname(RUNS) + f"/deploys/DEPLOY-RESULT-{m.group(3)}.txt") as f:
+                am = APPLIED_BY_RE.search(f.read())
+        except OSError:
+            continue
+        a, b = tparse(m.group(1), None), tparse(am.group(1), None) if am else None
+        if a and b and b > a:
+            out.append((a, b))
     return out
+
+
+def await_intervals():
+    """([awaiting image], [seal-ready unsealed]). Awaiting image: BUILD_DISPATCH_RESULT .. the first IMAGE_PUBLISHED of the same
+    platform sha (8-hex prefix). Seal-ready unsealed: a SEAL_READY wait result (result=gen=<id>) .. the first later SEALED_ORDERED
+    whose gen= or after= starts with that id. Unmatched starts book nothing (a dispatch that never published is not a wait)."""
+    lines = sorted(log_lines())
+    dispatched, ready, images, seals = [], [], [], []
+    for line in lines:
+        for rx, acc in ((BUILD_DISPATCH_RE, dispatched), (IMAGE_PUBLISHED_RE, images), (SEAL_READY_RE, ready)):
+            m = rx.match(line)
+            if m and tparse(m.group(1), None):
+                acc.append((tparse(m.group(1), None), m.group(2)[:8]))
+        m = SEALED_ORDERED_RE.match(line)
+        if m:
+            ids = [x[:8] for x in re.findall(r"\b(?:gen|after)=([0-9a-f]{8,32})\b", m.group(2))]
+            seals.append((when(m.group(1)), ids))
+    out_img, out_seal, used = [], [], set()
+    for t, sha in dispatched:
+        if sha in used:
+            continue
+        end = next((u for u, s in images if s == sha and u > t), None)
+        if end:
+            used.add(sha)
+            out_img.append((t, end))
+    for t, gid in ready:
+        end = next((u for u, ids in seals if u > t and gid in ids), None)
+        if end:
+            out_seal.append((t, end))
+    return out_img, out_seal
 
 
 def classify(gaps):
     """Seconds per cause inside GAPS; one cause per instant, first match wins (see "Idle attribution")."""
     sealed, observers, marks, readable = seal_sources()
     halts, deploys = halt_episodes(), deploy_gaps()
+    images, seal_ready = await_intervals()
     near = lambda ivs: [(a, b) for a, b in ivs if b > since and a < now]  # only intervals that touch the window matter
     sealed, observers, halts, deploys = near(sealed), near(observers), near(halts), near(deploys)
+    images, seal_ready = near(images), near(seal_ready)
     inside = lambda ivs, m: any(a <= m < b for a, b in ivs)
-    out = {k: 0.0 for k in ("teardown", "halt", "deploy", "device", "observer", "empty")}
+    out = {k: 0.0 for k in ("teardown", "halt", "deploy", "device", "observer", "awaiting_image", "seal_ready", "empty")}
     for ga, gb in gaps:
         cuts = {ga, gb}
-        for ivs in (teardowns, halts, deploys, sealed, observers):
+        for ivs in (teardowns, halts, deploys, sealed, observers, images, seal_ready):
             cuts.update(x for iv in ivs for x in iv if ga < x < gb)
         pts = sorted(cuts)
         for p, q in zip(pts, pts[1:]):
@@ -365,6 +419,10 @@ def classify(gaps):
                 k = "device"
             elif inside(observers, mid):
                 k = "observer"
+            elif inside(seal_ready, mid):
+                k = "seal_ready"
+            elif inside(images, mid):
+                k = "awaiting_image"
             else:
                 k = "empty"
             out[k] += (q - p).total_seconds()
@@ -426,7 +484,8 @@ print(f"  windows: started={starts} opened={opens} closed_ok={ok} closed_fail={f
 if split:
     print(f"  stopped split: sealed device request waiting on BENCH={split['device']/3600:.1f}h"
           f" | observer dry-run (device off)={split['observer']/3600:.1f}h | nothing sealed={split['empty']/3600:.1f}h"
-          f" | runner queue HALT={split['halt']/3600:.1f}h | runner deploy={split['deploy']/3600:.1f}h")
+          f" | runner queue HALT={split['halt']/3600:.1f}h | runner deploy={split['deploy']/3600:.1f}h"
+          f" | awaiting image={split['awaiting_image']/3600:.1f}h | seal-ready unsealed={split['seal_ready']/3600:.1f}h")
 print(f"  not idle (not in stopped): runner teardown={cls['teardown']/3600:.1f}h ({n_teardown})"
       f" | failed boot loads={failed_s/3600:.1f}h ({n_failed})")
 if have_seal_records:
